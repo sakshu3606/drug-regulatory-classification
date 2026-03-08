@@ -4,6 +4,7 @@ import os, sys, subprocess
 import pandas as pd
 import numpy as np
 import traceback
+import tensorflow as tf
 import warnings
 
 warnings.filterwarnings("ignore")
