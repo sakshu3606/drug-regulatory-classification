@@ -1,0 +1,13 @@
+(
+echo flask>=3.0.0
+echo flask-cors>=4.0.0
+echo pandas>=2.0.0
+echo numpy>=1.24.0
+echo scikit-learn>=1.3.0
+echo xgboost>=2.0.0
+echo feature-engine>=1.6.0
+echo joblib>=1.3.0
+echo tensorflow>=2.13.0
+echo scipy>=1.11.0
+echo gunicorn>=21.2.0
+) > requirements.txt
