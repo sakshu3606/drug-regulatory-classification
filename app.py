@@ -4,17 +4,25 @@ import os, sys, subprocess
 import pandas as pd
 import numpy as np
 import traceback
-import tensorflow as tf
 import warnings
 
 warnings.filterwarnings("ignore")
 
-# ── Auto-install feature-engine (required by Winsorizer in preprocess pipelines) ──
+# ── Auto-install feature-engine if missing ──────────────────────────────────
 try:
     import feature_engine
 except ImportError:
     print("⏳ Installing feature-engine...")
     subprocess.run([sys.executable, "-m", "pip", "install", "feature-engine", "-q"], check=False)
+
+# ── TensorFlow optional (not available on all deployment platforms) ──────────
+TF_AVAILABLE = False
+try:
+    import tensorflow as _tf
+    TF_AVAILABLE = True
+    print("✅ TensorFlow available")
+except Exception:
+    print("⚠️  TensorFlow not available — ANN model will be disabled")
 
 app = Flask(__name__)
 CORS(app)
@@ -128,15 +136,21 @@ def load_model(name):
     if name in _cache:
         return _cache[name]
     cfg  = REGISTRY[name]
+
+    # ANN requires TensorFlow — skip gracefully if not installed
+    if cfg.get("is_ann") and not TF_AVAILABLE:
+        raise RuntimeError(
+            "Deep Learning (ANN) model requires TensorFlow which is not "
+            "installed on this server. All other 6 models are available."
+        )
+
     path = os.path.join(BASE, cfg["file"])
     if not os.path.exists(path):
-        if name == "KNN":
-            raise FileNotFoundError(
-                "knn_model.pkl not found. The KNN notebook never saved the model. "
-                "Open knn_model.ipynb, run all cells, then add and run: "
-                "import joblib; joblib.dump(best_model, 'knn_model.pkl')"
-            )
-        raise FileNotFoundError(f"Model file not found: {cfg['file']}")
+        raise FileNotFoundError(
+            f"Model file '{cfg['file']}' not found on server. "
+            f"PKL files must be committed to GitHub to deploy on Render. "
+            f"See README for instructions."
+        )
     obj = _load_pkl(path)
     _cache[name] = obj
     return obj
