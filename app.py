@@ -366,7 +366,10 @@ def predict_all():
 
 
 if __name__ == "__main__":
-    import logging
+    import logging, os
     logging.basicConfig(level=logging.INFO)
-    print("\n✅  PharmAI Flask server  →  http://127.0.0.1:5050\n")
-    app.run(port=5050, debug=True, use_reloader=False)
+    port = int(os.environ.get("PORT", 5050))
+    host = "0.0.0.0" if os.environ.get("RENDER") else "127.0.0.1"
+    debug = not bool(os.environ.get("RENDER"))
+    print(f"\n✅  PharmAI Flask server  →  http://{host}:{port}\n")
+    app.run(host=host, port=port, debug=debug, use_reloader=False)
