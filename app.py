@@ -8,23 +8,21 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# ── Auto-install feature-engine if missing (blocks until done) ───────────────
+# ── Ensure feature-engine is installed (blocks until done) ─────────────────
 try:
     import feature_engine
-    print("✅ feature-engine already installed")
+    print("✅ feature-engine ready:", feature_engine.__version__)
 except ImportError:
-    print("⏳ Installing feature-engine — this may take 30s on first boot...")
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", "feature-engine", "--quiet", "--no-cache-dir"],
+    print("⏳ Installing feature-engine — please wait...")
+    r = subprocess.run(
+        [sys.executable, "-m", "pip", "install", "feature-engine==1.6.2", "--quiet"],
         capture_output=True, text=True
     )
-    print(result.stdout or "")
-    print(result.stderr or "")
     try:
         import feature_engine
-        print("✅ feature-engine installed successfully")
-    except ImportError as e:
-        print(f"❌ feature-engine install FAILED: {e} — pkl files using Winsorizer will fail")
+        print("✅ feature-engine installed:", feature_engine.__version__)
+    except ImportError:
+        print("❌ CRITICAL: feature-engine failed to install:", r.stderr[:200])
 
 # ── TensorFlow optional (not available on all deployment platforms) ──────────
 TF_AVAILABLE = False
@@ -129,7 +127,7 @@ ALL_LOWER       = [c.lower() for c in ALL_ORIG]
 def _load_pkl(path):
     import joblib, pickle
 
-    last_error = None
+    errors = []
     for fn in [
         lambda p: joblib.load(p),
         lambda p: pickle.load(open(p, "rb")),
@@ -138,19 +136,16 @@ def _load_pkl(path):
         try:
             return fn(path)
         except Exception as e:
-            last_error = e
-            continue
+            errors.append(str(e))
 
-    err_str = str(last_error)
-    if any(x in err_str for x in ["feature_engine", "Winsorizer", "ModuleNotFoundError", "No module"]):
+    combined = " | ".join(errors)
+    if any(x in combined for x in ["feature_engine", "Winsorizer", "No module", "cannot import"]):
         raise RuntimeError(
-            f"PKL load failed — feature-engine version mismatch. "
-            f"Open launch_pharmai.ipynb locally, run Cell 1 then Cell 2 (Fix PKL), "
-            f"then re-push ALL .pkl files to GitHub. Raw error: {err_str}"
+            f"PKL '{os.path.basename(path)}' needs feature-engine. "
+            f"Run Cell 1 + Cell 2 in launch_pharmai.ipynb locally, "
+            f"re-push all .pkl files to GitHub. Detail: {combined[:300]}"
         )
-    raise RuntimeError(
-        f"Cannot load '{os.path.basename(path)}': {last_error}"
-    )
+    raise RuntimeError(f"Cannot load '{os.path.basename(path)}': {combined[:300]}")
 
 
 def load_model(name):
@@ -401,6 +396,34 @@ def predict_all():
     })
 
 
+
+@app.route("/debug")
+def debug():
+    import platform
+    info = {"python": sys.version, "platform": platform.platform(), "base": BASE}
+    pkgs = {}
+    for pkg in ["feature_engine", "sklearn", "xgboost", "joblib", "pandas", "numpy", "flask"]:
+        try:
+            m = __import__(pkg)
+            pkgs[pkg] = getattr(m, "__version__", "ok")
+        except ImportError as e:
+            pkgs[pkg] = f"MISSING: {e}"
+    info["packages"] = pkgs
+    pkl_status = {}
+    for name, cfg in REGISTRY.items():
+        path = os.path.join(BASE, cfg["file"])
+        if not os.path.exists(path):
+            pkl_status[name] = "❌ FILE MISSING from GitHub"
+        else:
+            try:
+                _load_pkl(path)
+                pkl_status[name] = "✅ OK"
+            except Exception as e:
+                pkl_status[name] = f"❌ {str(e)[:200]}"
+    info["pkl_files"] = pkl_status
+    return jsonify(info)
+
+
 if __name__ == "__main__":
     import logging, os
     logging.basicConfig(level=logging.INFO)
@@ -409,41 +432,3 @@ if __name__ == "__main__":
     debug = not bool(os.environ.get("RENDER"))
     print(f"\n✅  PharmAI Flask server  →  http://{host}:{port}\n")
     app.run(host=host, port=port, debug=debug, use_reloader=False)
-
-
-# ── Debug route: visit /debug on Render to see exact error ──────────────────
-@app.route("/debug")
-def debug():
-    import sys, platform, traceback as tb
-    info = {
-        "python": sys.version,
-        "platform": platform.platform(),
-        "cwd": os.getcwd(),
-        "base": BASE,
-    }
-
-    # Check packages
-    pkgs = {}
-    for pkg in ["flask", "sklearn", "xgboost", "feature_engine", "joblib", "pandas", "numpy"]:
-        try:
-            m = __import__(pkg)
-            pkgs[pkg] = getattr(m, "__version__", "installed")
-        except ImportError as e:
-            pkgs[pkg] = f"MISSING: {e}"
-    info["packages"] = pkgs
-
-    # Check pkl files
-    pkl_status = {}
-    for name, cfg in REGISTRY.items():
-        path = os.path.join(BASE, cfg["file"])
-        if not os.path.exists(path):
-            pkl_status[name] = "FILE MISSING"
-        else:
-            try:
-                _load_pkl(path)
-                pkl_status[name] = "OK"
-            except Exception as e:
-                pkl_status[name] = f"LOAD ERROR: {e}"
-    info["pkl_files"] = pkl_status
-
-    return jsonify(info)
