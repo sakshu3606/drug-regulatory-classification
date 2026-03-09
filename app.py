@@ -75,6 +75,73 @@ CORS(app)
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 
+# ── SafeWinsorizer classes ────────────────────────────────────────────────────
+# These MUST be defined here so pickle can deserialize DT and RF models
+# (pickle looks up classes by module path at load time)
+from sklearn.base import BaseEstimator, TransformerMixin
+
+class SafeWinsorizer(BaseEstimator, TransformerMixin):
+    """Winsorizer wrapper for Decision Tree pipeline (original column names)."""
+    def __init__(self, variables):
+        self.variables = variables
+
+    def fit(self, X, y=None):
+        from feature_engine.outliers import Winsorizer
+        X_c = X.copy()
+        self.medians_ = {col: float(X_c[col].median()) for col in self.variables}
+        for col in self.variables:
+            X_c[col] = X_c[col].fillna(self.medians_[col])
+        self.winsorizer_ = Winsorizer(
+            capping_method="iqr", tail="both", fold=1.5,
+            variables=self.variables
+        )
+        self.winsorizer_.fit(X_c)
+        return self
+
+    def transform(self, X):
+        X_c = X.copy()
+        for col in self.variables:
+            X_c[col] = X_c[col].fillna(self.medians_.get(col, 0))
+        result = self.winsorizer_.transform(X_c)
+        for col in self.variables:
+            if result[col].isna().any():
+                result[col] = result[col].fillna(self.medians_.get(col, 0))
+        return result
+
+
+class SafeWinsorizerLower(BaseEstimator, TransformerMixin):
+    """Winsorizer wrapper for Random Forest pipeline (lowercase column names)."""
+    def __init__(self, variables):
+        self.variables = variables
+
+    def fit(self, X, y=None):
+        from feature_engine.outliers import Winsorizer
+        X_c = X.copy()
+        self.medians_ = {col: float(X_c[col].median()) for col in self.variables}
+        for col in self.variables:
+            X_c[col] = X_c[col].fillna(self.medians_[col])
+        self.winsorizer_ = Winsorizer(
+            capping_method="iqr", tail="both", fold=1.5,
+            variables=self.variables
+        )
+        self.winsorizer_.fit(X_c)
+        return self
+
+    def transform(self, X):
+        X_c = X.copy()
+        for col in self.variables:
+            X_c[col] = X_c[col].fillna(self.medians_.get(col, 0))
+        result = self.winsorizer_.transform(X_c)
+        for col in self.variables:
+            if result[col].isna().any():
+                result[col] = result[col].fillna(self.medians_.get(col, 0))
+        return result
+
+# Make these available at top-level so pickle can find them
+import sys as _sys
+_sys.modules[__name__].SafeWinsorizer      = SafeWinsorizer
+_sys.modules[__name__].SafeWinsorizerLower = SafeWinsorizerLower
+
 # ── Model Registry ────────────────────────────────────────────────────────────
 REGISTRY = {
     "Logistic Regression": {
