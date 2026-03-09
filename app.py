@@ -137,10 +137,6 @@ class SafeWinsorizerLower(BaseEstimator, TransformerMixin):
                 result[col] = result[col].fillna(self.medians_.get(col, 0))
         return result
 
-# Make these available at top-level so pickle can find them
-import sys as _sys
-_sys.modules[__name__].SafeWinsorizer      = SafeWinsorizer
-_sys.modules[__name__].SafeWinsorizerLower = SafeWinsorizerLower
 
 # ── Model Registry ────────────────────────────────────────────────────────────
 REGISTRY = {
