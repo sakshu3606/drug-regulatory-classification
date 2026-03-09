@@ -33,20 +33,20 @@ except ImportError:
     else:
         print("❌ feature-engine pip install failed")
 
-# pyarrow  (required to unpickle models saved on machines that had pyarrow)
+# pyarrow  — inject a dummy module so pkl files saved with pyarrow can still
+#            be unpickled on environments where pyarrow is not installed.
 try:
     import pyarrow
     print("✅ pyarrow ready:", pyarrow.__version__)
 except ImportError:
-    print("⏳ Installing pyarrow...")
-    if _pip_install("pyarrow==11.0.0"):
-        try:
-            import pyarrow
-            print("✅ pyarrow installed:", pyarrow.__version__)
-        except ImportError:
-            print("❌ pyarrow failed to install")
-    else:
-        print("❌ pyarrow pip install failed")
+    import types, sys as _sys
+    _pa = types.ModuleType("pyarrow")
+    _pa.__version__ = "0.0.0-stub"
+    for _sub in ["lib", "types", "compat", "pandas_compat",
+                 "array", "table", "schema", "field"]:
+        _sys.modules[f"pyarrow.{_sub}"] = types.ModuleType(f"pyarrow.{_sub}")
+    _sys.modules["pyarrow"] = _pa
+    print("✅ pyarrow stub injected (no install needed)")
 
 # ── TensorFlow optional ───────────────────────────────────────────────────────
 TF_AVAILABLE = False
@@ -55,16 +55,7 @@ try:
     TF_AVAILABLE = True
     print("✅ TensorFlow available:", _tf.__version__)
 except Exception:
-    print("⏳ TensorFlow not found — attempting install...")
-    if _pip_install("tensorflow==2.13.0"):
-        try:
-            import tensorflow as _tf
-            TF_AVAILABLE = True
-            print("✅ TensorFlow installed:", _tf.__version__)
-        except Exception as e:
-            print(f"❌ TensorFlow install failed: {e}")
-    else:
-        print("⚠️  TensorFlow not available — ANN model disabled")
+    print("⚠️  TensorFlow not available — ANN model disabled")
 
 app = Flask(__name__)
 CORS(app)
