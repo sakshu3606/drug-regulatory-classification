@@ -33,57 +33,12 @@ except ImportError:
     else:
         print("❌ feature-engine pip install failed")
 
-# pyarrow  — inject a comprehensive stub so pkl files saved with pyarrow
-#            can be unpickled without pyarrow installed.
+# pyarrow — not required after models are re-saved with resave_models.py
 try:
     import pyarrow
     print("✅ pyarrow ready:", pyarrow.__version__)
 except ImportError:
-    import types as _types, sys as _sys
-
-    def _make_stub_class(name):
-        """Return a stub class that accepts any args/kwargs and does nothing."""
-        return type(name, (), {
-            "__init__":      lambda self, *a, **k: None,
-            "__reduce__":    lambda self: (self.__class__, ()),
-            "__repr__":      lambda self: f"<{name} stub>",
-        })
-
-    # Build the main pyarrow module
-    _pa = _types.ModuleType("pyarrow")
-    _pa.__version__  = "0.0.0-stub"
-    _pa.__spec__     = None
-
-    # Stub classes that pandas / joblib reference during pickle load
-    for _cls in ["Array", "ChunkedArray", "Table", "RecordBatch", "Schema",
-                 "Field", "DataType", "DictionaryType", "ListType", "MapType",
-                 "StructType", "UnionType", "TimestampType", "Time32Type",
-                 "Time64Type", "FixedSizeBinaryType", "Decimal128Type",
-                 "BaseExtensionType", "ExtensionType", "NativeFile",
-                 "Buffer", "MemoryPool", "lib"]:
-        setattr(_pa, _cls, _make_stub_class(_cls))
-
-    # Stub functions
-    for _fn in ["array", "chunked_array", "table", "record_batch", "schema",
-                "field", "from_pandas", "concat_tables", "concat_arrays",
-                "nulls", "zeros"]:
-        setattr(_pa, _fn, lambda *a, **k: None)
-
-    # Register sub-modules
-    for _sub in ["lib", "types", "compat", "pandas_compat", "array",
-                 "table", "schema", "ipc", "compute", "dataset",
-                 "parquet", "csv", "json", "feather", "flight",
-                 "gandiva", "plasma", "orc", "fs"]:
-        _submod = _types.ModuleType(f"pyarrow.{_sub}")
-        # copy all stub attrs into submodule too
-        for _attr in dir(_pa):
-            if not _attr.startswith("__"):
-                setattr(_submod, _attr, getattr(_pa, _attr))
-        _sys.modules[f"pyarrow.{_sub}"] = _submod
-        setattr(_pa, _sub, _submod)
-
-    _sys.modules["pyarrow"] = _pa
-    print("✅ pyarrow comprehensive stub injected")
+    print("ℹ️  pyarrow not installed (not needed if models were re-saved)")
 
 # ── TensorFlow optional ───────────────────────────────────────────────────────
 TF_AVAILABLE = False
