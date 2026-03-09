@@ -109,30 +109,29 @@ ALL_LOWER         = [c.lower() for c in ALL_ORIG]
 NUMERIC_SET_LOWER = set(c.lower() for c in NUMERIC_ORIG)
 
 
-# ── PKL Loader (tries joblib, dill, pickle in order) ─────────────────────────
-
+# ── PKL Loader ────────────────────────────────────────────────────────────────
 def _load_pkl(path):
     import joblib, pickle
 
-    # Try 1: joblib (standard)
+    # Try 1: joblib
     try:
         return joblib.load(path)
-    except Exception as e1:
+    except Exception:
         pass
 
-    # Try 2: dill (handles lambdas and custom classes)
+    # Try 2: dill
     try:
         import dill
         with open(path, "rb") as f:
             return dill.load(f)
-    except Exception as e2:
+    except Exception:
         pass
 
-    # Try 3: pickle with latin-1 encoding
+    # Try 3: pickle latin-1
     try:
         with open(path, "rb") as f:
             return pickle.load(f, encoding="latin-1")
-    except Exception as e3:
+    except Exception:
         pass
 
     # Try 4: plain pickle
@@ -141,8 +140,7 @@ def _load_pkl(path):
             return pickle.load(f)
     except Exception as e4:
         raise RuntimeError(
-            f"Cannot load '{os.path.basename(path)}' with any loader "
-            f"(joblib / dill / pickle). "
+            f"Cannot load '{os.path.basename(path)}' with any loader. "
             f"Last error: {str(e4)[:300]}"
         )
 
@@ -150,17 +148,14 @@ def _load_pkl(path):
 def load_model(name):
     if name in _cache:
         return _cache[name]
-    cfg = REGISTRY[name]
+    cfg  = REGISTRY[name]
 
     if cfg.get("is_ann") and not TF_AVAILABLE:
-        raise RuntimeError("ANN requires TensorFlow which is not installed on this server.")
+        raise RuntimeError("ANN requires TensorFlow which is not installed.")
 
     path = os.path.join(BASE, cfg["file"])
     if not os.path.exists(path):
-        raise FileNotFoundError(
-            f"Model file '{cfg['file']}' not found. "
-            "Make sure all .pkl files are committed to GitHub."
-        )
+        raise FileNotFoundError(f"Model file '{cfg['file']}' not found on server.")
 
     obj = _load_pkl(path)
     _cache[name] = obj
@@ -181,7 +176,6 @@ def build_row(features: dict, col_case: str) -> pd.DataFrame:
     for col in all_cols:
         key = col.lower()
         val = norm.get(key, None)
-
         if key in NUMERIC_SET_LOWER:
             if val is None or val == "":
                 val = 0.0
@@ -192,7 +186,6 @@ def build_row(features: dict, col_case: str) -> pd.DataFrame:
                     val = 0.0
         else:
             val = "" if val is None else str(val).strip()
-
         row[col] = val
 
     return pd.DataFrame([row], columns=all_cols)
@@ -232,7 +225,6 @@ def _ann_predict(model, features: dict) -> dict:
     df  = build_row(features, "original")
     X   = _build_ann_input(df)
     raw = model.predict(X, verbose=0)
-
     if raw.ndim > 1 and raw.shape[1] > 1:
         probs = raw[0]
         idx   = int(np.argmax(probs))
@@ -242,10 +234,8 @@ def _ann_predict(model, features: dict) -> dict:
     else:
         prob_pos = float(np.clip(raw.flatten()[0], 0.0, 1.0))
         pred  = "Regulated Drug" if prob_pos >= 0.5 else "Non-Regulated Drug"
-        proba = {
-            "Regulated Drug":     round(prob_pos * 100, 2),
-            "Non-Regulated Drug": round((1.0 - prob_pos) * 100, 2),
-        }
+        proba = {"Regulated Drug": round(prob_pos * 100, 2),
+                 "Non-Regulated Drug": round((1.0 - prob_pos) * 100, 2)}
     return {"prediction": pred, "probability": proba}
 
 
@@ -259,17 +249,16 @@ def predict_one(name: str, features: dict) -> dict:
     df       = build_row(features, cfg["col_case"])
     raw_pred = model.predict(df)
     raw_val  = raw_pred[0] if isinstance(raw_pred, (list, np.ndarray)) else raw_pred
-
-    pred = decode_label(raw_val) if cfg["label_enc"] else str(raw_val)
+    pred     = decode_label(raw_val) if cfg["label_enc"] else str(raw_val)
 
     proba = None
     final = _get_final_estimator(model)
     if hasattr(final, "predict_proba"):
         try:
-            p = model.predict_proba(df)[0]
-            classes = list(final.classes_) if hasattr(final, "classes_") else list(range(len(p)))
+            p           = model.predict_proba(df)[0]
+            classes     = list(final.classes_) if hasattr(final, "classes_") else list(range(len(p)))
             class_names = [decode_label(c) for c in classes] if cfg["label_enc"] else [str(c) for c in classes]
-            proba = {class_names[i]: round(float(p[i]) * 100, 2) for i in range(len(p))}
+            proba       = {class_names[i]: round(float(p[i]) * 100, 2) for i in range(len(p))}
         except Exception as e:
             print(f"⚠️ predict_proba failed for {name}: {e}")
             proba = None
@@ -316,21 +305,18 @@ def predict():
         features   = body.get("features", {})
 
         if not features:
-            return jsonify({"error": "No features provided in request body"}), 400
+            return jsonify({"error": "No features provided"}), 400
         if model_name not in REGISTRY:
             return jsonify({"error": f"Unknown model: '{model_name}'"}), 400
 
         result = predict_one(model_name, features)
         return jsonify({"model": model_name, **result})
 
-    except FileNotFoundError as e:
-        return jsonify({"error": str(e)}), 404
-    except RuntimeError as e:
-        return jsonify({"error": str(e)}), 503
     except Exception as e:
         full_trace = traceback.format_exc()
         print(f"PREDICT ERROR [{body.get('model','?')}]:\n{full_trace}")
-        return jsonify({"error": str(e), "trace": full_trace}), 500
+        # Always return 200 with error info so frontend shows the message
+        return jsonify({"error": str(e), "trace": full_trace}), 200
 
 
 @app.route("/predict/all", methods=["POST"])
@@ -353,7 +339,7 @@ def predict_all():
                 models[name] = {"available": False, "error": str(e)}
 
         if not votes:
-            return jsonify({"error": "No models produced a prediction", "models": models}), 500
+            return jsonify({"error": "No models predicted", "models": models}), 200
 
         ensemble    = max(votes, key=votes.get)
         total_voted = sum(votes.values())
@@ -369,7 +355,7 @@ def predict_all():
     except Exception as e:
         full_trace = traceback.format_exc()
         print(f"PREDICT/ALL ERROR:\n{full_trace}")
-        return jsonify({"error": str(e), "trace": full_trace}), 500
+        return jsonify({"error": str(e), "trace": full_trace}), 200
 
 
 @app.route("/debug")
@@ -378,7 +364,8 @@ def debug():
     info = {"python": sys.version, "platform": platform.platform(), "base": BASE}
 
     pkgs = {}
-    for pkg in ["feature_engine", "sklearn", "xgboost", "joblib", "pandas", "numpy", "flask", "dill"]:
+    for pkg in ["feature_engine", "sklearn", "xgboost", "joblib",
+                "pandas", "numpy", "flask", "dill"]:
         try:
             m = __import__(pkg)
             pkgs[pkg] = getattr(m, "__version__", "ok")
@@ -403,7 +390,6 @@ def debug():
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
-
 if __name__ == "__main__":
     import logging
     logging.basicConfig(level=logging.INFO)
