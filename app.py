@@ -55,7 +55,28 @@ try:
     TF_AVAILABLE = True
     print("✅ TensorFlow available:", _tf.__version__)
 except Exception:
-    print("⚠️  TensorFlow not available — ANN model disabled")
+    # Try installing a version compatible with the running Python
+    import sys as _sys
+    _pymajor = _sys.version_info.major
+    _pyminor = _sys.version_info.minor
+    print(f"⏳ TF not found, Python {_pymajor}.{_pyminor} — trying compatible version...")
+    # TF version support: <=3.11 → 2.13.0 | 3.12 → 2.16.0 | 3.13+ → not supported yet
+    if _pyminor <= 11:
+        _tf_ver = "tensorflow==2.13.0"
+    elif _pyminor == 12:
+        _tf_ver = "tensorflow==2.16.2"
+    else:
+        _tf_ver = None  # Python 3.13/3.14 - no TF wheel exists yet
+
+    if _tf_ver and _pip_install(_tf_ver):
+        try:
+            import tensorflow as _tf
+            TF_AVAILABLE = True
+            print(f"✅ TensorFlow installed: {_tf.__version__}")
+        except Exception as _e:
+            print(f"❌ TF import failed after install: {_e}")
+    else:
+        print("⚠️  TensorFlow not available — ANN model disabled (unsupported Python version)")
 
 app = Flask(__name__)
 CORS(app)
