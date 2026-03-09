@@ -39,7 +39,7 @@ try:
     print("✅ pyarrow ready:", pyarrow.__version__)
 except ImportError:
     print("⏳ Installing pyarrow...")
-    if _pip_install("pyarrow"):
+    if _pip_install("pyarrow==14.0.2"):
         try:
             import pyarrow
             print("✅ pyarrow installed:", pyarrow.__version__)
@@ -55,14 +55,14 @@ try:
     TF_AVAILABLE = True
     print("✅ TensorFlow available:", _tf.__version__)
 except Exception:
-    print("⏳ TensorFlow not found — attempting tensorflow-cpu install...")
-    if _pip_install("tensorflow-cpu"):
+    print("⏳ TensorFlow not found — attempting install...")
+    if _pip_install("tensorflow==2.15.0"):
         try:
             import tensorflow as _tf
             TF_AVAILABLE = True
-            print("✅ tensorflow-cpu installed:", _tf.__version__)
+            print("✅ TensorFlow installed:", _tf.__version__)
         except Exception as e:
-            print(f"❌ tensorflow-cpu install failed: {e}")
+            print(f"❌ TensorFlow install failed: {e}")
     else:
         print("⚠️  TensorFlow not available — ANN model disabled")
 

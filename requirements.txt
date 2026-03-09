@@ -9,5 +9,5 @@ joblib
 feature-engine==1.6.2
 requests
 dill
-pyarrow
-tensorflow-cpu
+pyarrow==14.0.2
+tensorflow==2.15.0
