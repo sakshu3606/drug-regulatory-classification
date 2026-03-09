@@ -39,7 +39,7 @@ try:
     print("✅ pyarrow ready:", pyarrow.__version__)
 except ImportError:
     print("⏳ Installing pyarrow...")
-    if _pip_install("pyarrow==14.0.2"):
+    if _pip_install("pyarrow==11.0.0"):
         try:
             import pyarrow
             print("✅ pyarrow installed:", pyarrow.__version__)
@@ -56,7 +56,7 @@ try:
     print("✅ TensorFlow available:", _tf.__version__)
 except Exception:
     print("⏳ TensorFlow not found — attempting install...")
-    if _pip_install("tensorflow==2.15.0"):
+    if _pip_install("tensorflow==2.13.0"):
         try:
             import tensorflow as _tf
             TF_AVAILABLE = True
