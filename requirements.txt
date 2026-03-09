@@ -8,3 +8,4 @@ xgboost
 joblib
 feature-engine==1.6.2
 requests
+dill

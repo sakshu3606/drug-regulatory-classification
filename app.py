@@ -80,7 +80,6 @@ REGISTRY = {
     },
 }
 
-# Label maps: 0 = Non-Regulated Drug, 1 = Regulated Drug
 LABEL_MAP     = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
 ANN_LABEL_MAP = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
 
@@ -110,22 +109,42 @@ ALL_LOWER         = [c.lower() for c in ALL_ORIG]
 NUMERIC_SET_LOWER = set(c.lower() for c in NUMERIC_ORIG)
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── PKL Loader (tries joblib, dill, pickle in order) ─────────────────────────
 
 def _load_pkl(path):
     import joblib, pickle
-    errors = []
-    for loader in [
-        lambda p: joblib.load(p),
-        lambda p: pickle.load(open(p, "rb")),
-        lambda p: pickle.load(open(p, "rb"), encoding="latin-1"),
-    ]:
-        try:
-            return loader(path)
-        except Exception as e:
-            errors.append(str(e))
-    combined = " | ".join(errors)
-    raise RuntimeError(f"Cannot load '{os.path.basename(path)}': {combined[:400]}")
+
+    # Try 1: joblib (standard)
+    try:
+        return joblib.load(path)
+    except Exception as e1:
+        pass
+
+    # Try 2: dill (handles lambdas and custom classes)
+    try:
+        import dill
+        with open(path, "rb") as f:
+            return dill.load(f)
+    except Exception as e2:
+        pass
+
+    # Try 3: pickle with latin-1 encoding
+    try:
+        with open(path, "rb") as f:
+            return pickle.load(f, encoding="latin-1")
+    except Exception as e3:
+        pass
+
+    # Try 4: plain pickle
+    try:
+        with open(path, "rb") as f:
+            return pickle.load(f)
+    except Exception as e4:
+        raise RuntimeError(
+            f"Cannot load '{os.path.basename(path)}' with any loader "
+            f"(joblib / dill / pickle). "
+            f"Last error: {str(e4)[:300]}"
+        )
 
 
 def load_model(name):
@@ -149,13 +168,10 @@ def load_model(name):
 
 
 def build_row(features: dict, col_case: str) -> pd.DataFrame:
-    """Build a single-row DataFrame with correct column names for each model."""
-    # Normalise incoming keys to lowercase
     norm = {}
     for k, v in features.items():
         norm[k.lower().strip()] = v
 
-    # Alias: rd_investment_million → r&d_investment_million
     if "rd_investment_million" in norm and "r&d_investment_million" not in norm:
         norm["r&d_investment_million"] = norm["rd_investment_million"]
 
@@ -167,8 +183,7 @@ def build_row(features: dict, col_case: str) -> pd.DataFrame:
         val = norm.get(key, None)
 
         if key in NUMERIC_SET_LOWER:
-            # Numeric column
-            if val is None or val == "" or val != val:  # None / empty / NaN
+            if val is None or val == "":
                 val = 0.0
             else:
                 try:
@@ -176,11 +191,7 @@ def build_row(features: dict, col_case: str) -> pd.DataFrame:
                 except (ValueError, TypeError):
                     val = 0.0
         else:
-            # Categorical column — default to empty string so pipeline OHE handles it
-            if val is None:
-                val = ""
-            else:
-                val = str(val).strip()
+            val = "" if val is None else str(val).strip()
 
         row[col] = val
 
@@ -188,7 +199,6 @@ def build_row(features: dict, col_case: str) -> pd.DataFrame:
 
 
 def decode_label(raw) -> str:
-    """Convert integer label-encoded predictions back to class name strings."""
     try:
         idx = int(float(str(raw)))
         return LABEL_MAP.get(idx, str(raw))
@@ -197,45 +207,28 @@ def decode_label(raw) -> str:
 
 
 def _get_final_estimator(model):
-    """Extract the final estimator from a sklearn Pipeline."""
     if hasattr(model, "named_steps"):
         return list(model.named_steps.values())[-1]
     return model
 
 
 def _build_ann_input(df: pd.DataFrame) -> np.ndarray:
-    """Preprocess DataFrame for ANN model."""
-    # Try ANN-specific pipeline first
-    ann_pipe_path = os.path.join(BASE, "preprocess_pipeline_ann.pkl")
-    if os.path.exists(ann_pipe_path):
-        try:
-            pipe = _load_pkl(ann_pipe_path)
-            X = pipe.transform(df)
-            if hasattr(X, "toarray"):
-                X = X.toarray()
-            return np.array(X, dtype="float32")
-        except Exception as e:
-            print(f"⚠️ ANN pipeline failed: {e}, falling back to numeric only")
-
-    # Fallback: shared pipeline
-    shared = os.path.join(BASE, "preprocess_pipeline.pkl")
-    if os.path.exists(shared):
-        try:
-            pipe = _load_pkl(shared)
-            X = pipe.transform(df)
-            if hasattr(X, "toarray"):
-                X = X.toarray()
-            return np.array(X, dtype="float32")
-        except Exception as e:
-            print(f"⚠️ Shared pipeline failed: {e}, falling back to numeric only")
-
-    # Last resort: numeric columns only
+    for pipe_file in ["preprocess_pipeline_ann.pkl", "preprocess_pipeline.pkl"]:
+        pipe_path = os.path.join(BASE, pipe_file)
+        if os.path.exists(pipe_path):
+            try:
+                pipe = _load_pkl(pipe_path)
+                X = pipe.transform(df)
+                if hasattr(X, "toarray"):
+                    X = X.toarray()
+                return np.array(X, dtype="float32")
+            except Exception as e:
+                print(f"⚠️ {pipe_file} failed: {e}")
     numeric_cols = [c for c in df.columns if c.lower() in NUMERIC_SET_LOWER]
     return df[numeric_cols].values.astype("float32")
 
 
 def _ann_predict(model, features: dict) -> dict:
-    """Handle raw Keras ANN model prediction."""
     df  = build_row(features, "original")
     X   = _build_ann_input(df)
     raw = model.predict(X, verbose=0)
@@ -244,10 +237,8 @@ def _ann_predict(model, features: dict) -> dict:
         probs = raw[0]
         idx   = int(np.argmax(probs))
         pred  = ANN_LABEL_MAP.get(idx, str(idx))
-        proba = {
-            ANN_LABEL_MAP.get(i, str(i)): round(float(probs[i]) * 100, 2)
-            for i in range(len(probs))
-        }
+        proba = {ANN_LABEL_MAP.get(i, str(i)): round(float(probs[i]) * 100, 2)
+                 for i in range(len(probs))}
     else:
         prob_pos = float(np.clip(raw.flatten()[0], 0.0, 1.0))
         pred  = "Regulated Drug" if prob_pos >= 0.5 else "Non-Regulated Drug"
@@ -255,7 +246,6 @@ def _ann_predict(model, features: dict) -> dict:
             "Regulated Drug":     round(prob_pos * 100, 2),
             "Non-Regulated Drug": round((1.0 - prob_pos) * 100, 2),
         }
-
     return {"prediction": pred, "probability": proba}
 
 
@@ -263,34 +253,22 @@ def predict_one(name: str, features: dict) -> dict:
     cfg   = REGISTRY[name]
     model = load_model(name)
 
-    # ANN: raw Keras model
     if cfg.get("is_ann") and not hasattr(model, "named_steps"):
         return _ann_predict(model, features)
 
-    # sklearn Pipeline
-    df      = build_row(features, cfg["col_case"])
+    df       = build_row(features, cfg["col_case"])
     raw_pred = model.predict(df)
     raw_val  = raw_pred[0] if isinstance(raw_pred, (list, np.ndarray)) else raw_pred
 
     pred = decode_label(raw_val) if cfg["label_enc"] else str(raw_val)
 
-    # Probability
     proba = None
     final = _get_final_estimator(model)
     if hasattr(final, "predict_proba"):
         try:
             p = model.predict_proba(df)[0]
-
-            if hasattr(final, "classes_"):
-                classes = list(final.classes_)
-            else:
-                classes = list(range(len(p)))
-
-            if cfg["label_enc"]:
-                class_names = [decode_label(c) for c in classes]
-            else:
-                class_names = [str(c) for c in classes]
-
+            classes = list(final.classes_) if hasattr(final, "classes_") else list(range(len(p)))
+            class_names = [decode_label(c) for c in classes] if cfg["label_enc"] else [str(c) for c in classes]
             proba = {class_names[i]: round(float(p[i]) * 100, 2) for i in range(len(p))}
         except Exception as e:
             print(f"⚠️ predict_proba failed for {name}: {e}")
@@ -315,7 +293,7 @@ def health():
 def model_status():
     status = {}
     for name, cfg in REGISTRY.items():
-        path  = os.path.join(BASE, cfg["file"])
+        path   = os.path.join(BASE, cfg["file"])
         exists = os.path.exists(path)
         entry  = {"ready": exists, "model_file": cfg["file"]}
         if exists:
@@ -331,6 +309,7 @@ def model_status():
 
 @app.route("/predict", methods=["POST"])
 def predict():
+    body = {}
     try:
         body       = request.get_json(force=True, silent=True) or {}
         model_name = body.get("model", "Random Forest")
@@ -338,10 +317,8 @@ def predict():
 
         if not features:
             return jsonify({"error": "No features provided in request body"}), 400
-
         if model_name not in REGISTRY:
-            return jsonify({"error": f"Unknown model: '{model_name}'. "
-                            f"Valid models: {list(REGISTRY.keys())}"}), 400
+            return jsonify({"error": f"Unknown model: '{model_name}'"}), 400
 
         result = predict_one(model_name, features)
         return jsonify({"model": model_name, **result})
@@ -366,7 +343,6 @@ def predict_all():
             return jsonify({"error": "No features provided"}), 400
 
         votes, models = {}, {}
-
         for name in REGISTRY:
             try:
                 result       = predict_one(name, features)
@@ -399,14 +375,10 @@ def predict_all():
 @app.route("/debug")
 def debug():
     import platform
-    info = {
-        "python":   sys.version,
-        "platform": platform.platform(),
-        "base":     BASE,
-    }
+    info = {"python": sys.version, "platform": platform.platform(), "base": BASE}
 
     pkgs = {}
-    for pkg in ["feature_engine", "sklearn", "xgboost", "joblib", "pandas", "numpy", "flask"]:
+    for pkg in ["feature_engine", "sklearn", "xgboost", "joblib", "pandas", "numpy", "flask", "dill"]:
         try:
             m = __import__(pkg)
             pkgs[pkg] = getattr(m, "__version__", "ok")
