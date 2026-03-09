@@ -362,7 +362,9 @@ def predict():
         result = predict_one(model_name, features)
         return jsonify({"model": model_name, **result})
     except Exception as e:
-        return jsonify({"error": str(e), "trace": traceback.format_exc()}), 500
+        full_trace = traceback.format_exc()
+        print(f"PREDICT ERROR [{model_name}]:\n{full_trace}")
+        return jsonify({"error": str(e), "trace": full_trace}), 500
 
 
 @app.route("/predict/all", methods=["POST"])
