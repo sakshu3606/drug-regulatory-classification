@@ -524,7 +524,7 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2);}
   <div class="tb-right">
     <div class="flask-input">
       <span>Flask:</span>
-      <input type="text" id="flaskUrl" value="https://pharmai-backend.onrender.com" oninput="debounce()">
+      <input type="text" id="flaskUrl" value="https://drug-regulatory-classificatioon.onrender.com" oninput="debounce()">
     </div>
     <div class="conn-badge offline" id="connBadge">
       <div class="pulse"></div>
@@ -863,7 +863,7 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2);}
 <script>
 /* ── CONFIG ──────────────────────────────────────────────────────────────── */
 const MODELS = ['Logistic Regression','Decision Tree','Random Forest','KNN','SVM','XGBoost','Deep Learning (ANN)'];
-const base   = () => (document.getElementById('flaskUrl').value || 'https://pharmai-backend.onrender.com').replace(/\/$/,'');
+const base   = () => (document.getElementById('flaskUrl').value || 'https://drug-regulatory-classificatioon.onrender.com').replace(/\/$/,'');
 
 /* ── STATE ───────────────────────────────────────────────────────────────── */
 let curModel  = 'Logistic Regression';
