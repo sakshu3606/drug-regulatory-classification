@@ -9,3 +9,4 @@ joblib
 feature-engine==1.6.2
 requests
 dill
+tensorflow==2.13.0
