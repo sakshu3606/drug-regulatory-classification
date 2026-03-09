@@ -8,31 +8,63 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# ── feature-engine check ──────────────────────────────────────────────────────
+# ── Auto-install missing packages ─────────────────────────────────────────────
+import subprocess
+
+def _pip_install(pkg, quiet=True):
+    result = subprocess.run(
+        [sys.executable, "-m", "pip", "install", pkg, "--quiet"],
+        capture_output=True, text=True
+    )
+    return result.returncode == 0
+
+# feature-engine
 try:
     import feature_engine
     print("✅ feature-engine ready:", feature_engine.__version__)
 except ImportError:
-    import subprocess
     print("⏳ Installing feature-engine...")
-    subprocess.run(
-        [sys.executable, "-m", "pip", "install", "feature-engine==1.6.2", "--quiet"],
-        capture_output=True, text=True
-    )
-    try:
-        import feature_engine
-        print("✅ feature-engine installed:", feature_engine.__version__)
-    except ImportError:
-        print("❌ feature-engine failed to install")
+    if _pip_install("feature-engine==1.6.2"):
+        try:
+            import feature_engine
+            print("✅ feature-engine installed:", feature_engine.__version__)
+        except ImportError:
+            print("❌ feature-engine failed to install")
+    else:
+        print("❌ feature-engine pip install failed")
+
+# pyarrow  (required to unpickle models saved on machines that had pyarrow)
+try:
+    import pyarrow
+    print("✅ pyarrow ready:", pyarrow.__version__)
+except ImportError:
+    print("⏳ Installing pyarrow...")
+    if _pip_install("pyarrow"):
+        try:
+            import pyarrow
+            print("✅ pyarrow installed:", pyarrow.__version__)
+        except ImportError:
+            print("❌ pyarrow failed to install")
+    else:
+        print("❌ pyarrow pip install failed")
 
 # ── TensorFlow optional ───────────────────────────────────────────────────────
 TF_AVAILABLE = False
 try:
     import tensorflow as _tf
     TF_AVAILABLE = True
-    print("✅ TensorFlow available")
+    print("✅ TensorFlow available:", _tf.__version__)
 except Exception:
-    print("⚠️  TensorFlow not available — ANN model disabled")
+    print("⏳ TensorFlow not found — attempting tensorflow-cpu install...")
+    if _pip_install("tensorflow-cpu"):
+        try:
+            import tensorflow as _tf
+            TF_AVAILABLE = True
+            print("✅ tensorflow-cpu installed:", _tf.__version__)
+        except Exception as e:
+            print(f"❌ tensorflow-cpu install failed: {e}")
+    else:
+        print("⚠️  TensorFlow not available — ANN model disabled")
 
 app = Flask(__name__)
 CORS(app)
