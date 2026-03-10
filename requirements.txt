@@ -3,10 +3,9 @@ flask-cors
 pandas
 numpy
 scikit-learn
-xgboost
 joblib
+xgboost
 feature-engine==1.6.2
-requests
 dill
+requests
 gunicorn
-tensorflow-cpu
