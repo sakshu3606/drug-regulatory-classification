@@ -1,6 +1,6 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-import os, sys
+import os, sys, gc
 import pandas as pd
 import numpy as np
 import traceback
@@ -8,67 +8,22 @@ import warnings
 
 warnings.filterwarnings("ignore")
 
-# ── Auto-install missing packages ─────────────────────────────────────────────
-import subprocess
+# ── TensorFlow: lazy import only (NOT at startup) ─────────────────────────────
+# Importing TF at startup wastes ~300-400MB on Render's 512MB free tier.
+# It is imported on-demand only when ANN is actually requested.
+TF_AVAILABLE = None   # None = not yet checked; True/False after first check
 
-def _pip_install(pkg, quiet=True):
-    result = subprocess.run(
-        [sys.executable, "-m", "pip", "install", pkg, "--quiet"],
-        capture_output=True, text=True
-    )
-    return result.returncode == 0
+def _check_tf():
+    global TF_AVAILABLE
+    if TF_AVAILABLE is not None:
+        return TF_AVAILABLE
+    try:
+        import tensorflow as _tf  # noqa: F401
+        TF_AVAILABLE = True
+    except Exception:
+        TF_AVAILABLE = False
+    return TF_AVAILABLE
 
-# feature-engine
-try:
-    import feature_engine
-    print("✅ feature-engine ready:", feature_engine.__version__)
-except ImportError:
-    print("⏳ Installing feature-engine...")
-    if _pip_install("feature-engine==1.6.2"):
-        try:
-            import feature_engine
-            print("✅ feature-engine installed:", feature_engine.__version__)
-        except ImportError:
-            print("❌ feature-engine failed to install")
-    else:
-        print("❌ feature-engine pip install failed")
-
-# pyarrow — not required after models are re-saved with resave_models.py
-try:
-    import pyarrow
-    print("✅ pyarrow ready:", pyarrow.__version__)
-except ImportError:
-    print("ℹ️  pyarrow not installed (not needed if models were re-saved)")
-
-# ── TensorFlow optional ───────────────────────────────────────────────────────
-TF_AVAILABLE = False
-try:
-    import tensorflow as _tf
-    TF_AVAILABLE = True
-    print("✅ TensorFlow available:", _tf.__version__)
-except Exception:
-    # Try installing a version compatible with the running Python
-    import sys as _sys
-    _pymajor = _sys.version_info.major
-    _pyminor = _sys.version_info.minor
-    print(f"⏳ TF not found, Python {_pymajor}.{_pyminor} — trying compatible version...")
-    # TF version support: <=3.11 → 2.13.0 | 3.12 → 2.16.0 | 3.13+ → not supported yet
-    if _pyminor <= 11:
-        _tf_ver = "tensorflow==2.13.0"
-    elif _pyminor == 12:
-        _tf_ver = "tensorflow==2.16.2"
-    else:
-        _tf_ver = None  # Python 3.13/3.14 - no TF wheel exists yet
-
-    if _tf_ver and _pip_install(_tf_ver):
-        try:
-            import tensorflow as _tf
-            TF_AVAILABLE = True
-            print(f"✅ TensorFlow installed: {_tf.__version__}")
-        except Exception as _e:
-            print(f"❌ TF import failed after install: {_e}")
-    else:
-        print("⚠️  TensorFlow not available — ANN model disabled (unsupported Python version)")
 
 app = Flask(__name__)
 CORS(app)
@@ -76,8 +31,6 @@ CORS(app)
 BASE = os.path.dirname(os.path.abspath(__file__))
 
 # ── SafeWinsorizer classes ────────────────────────────────────────────────────
-# These MUST be defined here so pickle can deserialize DT and RF models
-# (pickle looks up classes by module path at load time)
 from sklearn.base import BaseEstimator, TransformerMixin
 
 class SafeWinsorizer(BaseEstimator, TransformerMixin):
@@ -92,8 +45,7 @@ class SafeWinsorizer(BaseEstimator, TransformerMixin):
         for col in self.variables:
             X_c[col] = X_c[col].fillna(self.medians_[col])
         self.winsorizer_ = Winsorizer(
-            capping_method="iqr", tail="both", fold=1.5,
-            variables=self.variables
+            capping_method="iqr", tail="both", fold=1.5, variables=self.variables
         )
         self.winsorizer_.fit(X_c)
         return self
@@ -121,8 +73,7 @@ class SafeWinsorizerLower(BaseEstimator, TransformerMixin):
         for col in self.variables:
             X_c[col] = X_c[col].fillna(self.medians_[col])
         self.winsorizer_ = Winsorizer(
-            capping_method="iqr", tail="both", fold=1.5,
-            variables=self.variables
+            capping_method="iqr", tail="both", fold=1.5, variables=self.variables
         )
         self.winsorizer_.fit(X_c)
         return self
@@ -179,10 +130,14 @@ REGISTRY = {
     },
 }
 
+# ── MEMORY: Only ONE model is kept in memory at a time ───────────────────────
+# Render free tier has 512MB. Keeping all 7 models loaded simultaneously
+# causes OOM crashes. We use a single-slot LRU-1 cache instead.
+_cache = {}          # { name: model_object }
+_CACHE_LIMIT = 1     # max models in memory simultaneously (increase if upgraded)
+
 LABEL_MAP     = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
 ANN_LABEL_MAP = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
-
-_cache = {}
 
 # ── Column definitions ────────────────────────────────────────────────────────
 NUMERIC_ORIG = [
@@ -195,7 +150,6 @@ NUMERIC_ORIG = [
     "Export_Percentage", "Online_Sales_Percentage", "Brand_Reputation_Score",
     "Doctor_Recommendation_Rate",
 ]
-
 CATEGORICAL_ORIG = [
     "Drug_Form", "Therapeutic_Class", "Manufacturing_Region",
     "Requires_Cold_Storage", "OTC_Flag", "High_Risk_Substance",
@@ -211,29 +165,21 @@ NUMERIC_SET_LOWER = set(c.lower() for c in NUMERIC_ORIG)
 # ── PKL Loader ────────────────────────────────────────────────────────────────
 def _load_pkl(path):
     import joblib, pickle
-
-    # Try 1: joblib
     try:
         return joblib.load(path)
     except Exception:
         pass
-
-    # Try 2: dill
     try:
         import dill
         with open(path, "rb") as f:
             return dill.load(f)
     except Exception:
         pass
-
-    # Try 3: pickle latin-1
     try:
         with open(path, "rb") as f:
             return pickle.load(f, encoding="latin-1")
     except Exception:
         pass
-
-    # Try 4: plain pickle
     try:
         with open(path, "rb") as f:
             return pickle.load(f)
@@ -245,22 +191,40 @@ def _load_pkl(path):
 
 
 def load_model(name):
+    """
+    Load a model with a single-slot cache.
+    When a new model is requested, the old one is evicted and gc.collect() is
+    called so Python frees the RAM before loading the next model.
+    This keeps peak memory use at ~1 model at a time instead of 7.
+    """
+    global _cache
+
     if name in _cache:
         return _cache[name]
-    cfg  = REGISTRY[name]
 
-    if cfg.get("is_ann") and not TF_AVAILABLE:
+    cfg = REGISTRY[name]
+
+    # ANN requires TF — check lazily
+    if cfg.get("is_ann") and not _check_tf():
         raise RuntimeError("ANN requires TensorFlow which is not installed.")
 
     path = os.path.join(BASE, cfg["file"])
     if not os.path.exists(path):
         raise FileNotFoundError(f"Model file '{cfg['file']}' not found on server.")
 
+    # Evict old models from cache if at limit
+    if len(_cache) >= _CACHE_LIMIT:
+        evict_names = list(_cache.keys())
+        for evict in evict_names:
+            del _cache[evict]
+        gc.collect()   # actually release the RAM
+
     obj = _load_pkl(path)
     _cache[name] = obj
     return obj
 
 
+# ── Helpers ───────────────────────────────────────────────────────────────────
 def build_row(features: dict, col_case: str) -> pd.DataFrame:
     norm = {}
     for k, v in features.items():
@@ -374,24 +338,22 @@ def index():
 
 @app.route("/health")
 def health():
+    # Lightweight: does NOT load any models
     return jsonify({"status": "ok"})
 
 
 @app.route("/models/status")
 def model_status():
+    # MEMORY SAFE: only check file existence, do NOT load models
     status = {}
     for name, cfg in REGISTRY.items():
         path   = os.path.join(BASE, cfg["file"])
         exists = os.path.exists(path)
-        entry  = {"ready": exists, "model_file": cfg["file"]}
-        if exists:
-            try:
-                _load_pkl(path)
-                entry["loaded"] = True
-            except Exception as e:
-                entry["loaded"] = False
-                entry["error"]  = str(e)[:200]
-        status[name] = entry
+        status[name] = {
+            "ready":      exists,
+            "model_file": cfg["file"],
+            "cached":     name in _cache,
+        }
     return jsonify(status)
 
 
@@ -414,12 +376,15 @@ def predict():
     except Exception as e:
         full_trace = traceback.format_exc()
         print(f"PREDICT ERROR [{body.get('model','?')}]:\n{full_trace}")
-        # Always return 200 with error info so frontend shows the message
         return jsonify({"error": str(e), "trace": full_trace}), 200
 
 
 @app.route("/predict/all", methods=["POST"])
 def predict_all():
+    """
+    MEMORY-SAFE ensemble: runs models one-at-a-time and evicts each before
+    loading the next. Skips ANN on free tier to avoid TF memory spike.
+    """
     try:
         body     = request.get_json(force=True, silent=True) or {}
         features = body.get("features", {})
@@ -427,8 +392,18 @@ def predict_all():
         if not features:
             return jsonify({"error": "No features provided"}), 400
 
+        # Skip ANN in ensemble by default to stay within 512MB
+        skip_ann = not bool(os.environ.get("ENABLE_ANN_ENSEMBLE"))
+
         votes, models = {}, {}
         for name in REGISTRY:
+            if skip_ann and REGISTRY[name].get("is_ann"):
+                models[name] = {
+                    "available": False,
+                    "error": "ANN skipped in ensemble to conserve memory. "
+                             "Use /predict with model='Deep Learning (ANN)' directly."
+                }
+                continue
             try:
                 result       = predict_one(name, features)
                 pred         = result["prediction"]
@@ -436,6 +411,11 @@ def predict_all():
                 models[name] = {"available": True, **result}
             except Exception as e:
                 models[name] = {"available": False, "error": str(e)}
+            finally:
+                # Evict immediately after each prediction to free RAM
+                if name in _cache:
+                    del _cache[name]
+                gc.collect()
 
         if not votes:
             return jsonify({"error": "No models predicted", "models": models}), 200
@@ -460,7 +440,12 @@ def predict_all():
 @app.route("/debug")
 def debug():
     import platform
-    info = {"python": sys.version, "platform": platform.platform(), "base": BASE}
+    info = {
+        "python":   sys.version,
+        "platform": platform.platform(),
+        "base":     BASE,
+        "cache":    list(_cache.keys()),
+    }
 
     pkgs = {}
     for pkg in ["feature_engine", "sklearn", "xgboost", "joblib",
@@ -472,17 +457,15 @@ def debug():
             pkgs[pkg] = f"MISSING: {e}"
     info["packages"] = pkgs
 
+    # MEMORY SAFE: only check file existence, do NOT load models
     pkl_status = {}
     for name, cfg in REGISTRY.items():
         path = os.path.join(BASE, cfg["file"])
         if not os.path.exists(path):
             pkl_status[name] = "❌ FILE MISSING"
         else:
-            try:
-                _load_pkl(path)
-                pkl_status[name] = "✅ OK"
-            except Exception as e:
-                pkl_status[name] = f"❌ {str(e)[:200]}"
+            size_kb = os.path.getsize(path) / 1024
+            pkl_status[name] = f"✅ FILE OK ({size_kb:.1f} KB)"
     info["pkl_files"] = pkl_status
 
     return jsonify(info)
