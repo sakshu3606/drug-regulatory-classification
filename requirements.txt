@@ -1,6 +1,5 @@
 flask
 flask-cors
-gunicorn
 pandas
 numpy
 scikit-learn
@@ -9,4 +8,6 @@ joblib
 feature-engine==1.6.2
 requests
 dill
-tensorflow==2.13.0
+# TensorFlow: 2.13.0 does NOT support Python 3.12+
+# Use 2.16.2 for Python 3.12, or remove entirely to save 300MB RAM on free tier
+tensorflow==2.16.2
