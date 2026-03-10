@@ -19,25 +19,6 @@ try:
 except ImportError:
     print("❌ feature-engine not installed. Add it to requirements.txt")
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MEMORY FIX 2: Lazy-import TensorFlow only when an ANN prediction is needed.
-#   TF alone consumes ~400 MB.  Importing it at startup on Render's free 512 MB
-#   plan guarantees an OOM crash before the first request is served.
-# ─────────────────────────────────────────────────────────────────────────────
-_TF_AVAILABLE = None   # None = not yet checked
-
-def _check_tf():
-    global _TF_AVAILABLE
-    if _TF_AVAILABLE is not None:
-        return _TF_AVAILABLE
-    try:
-        import tensorflow as _tf  # noqa: F401
-        _TF_AVAILABLE = True
-    except Exception:
-        _TF_AVAILABLE = False
-    return _TF_AVAILABLE
-
-
 app = Flask(__name__)
 CORS(app)
 
@@ -136,28 +117,20 @@ REGISTRY = {
         "col_case":  "original",
         "label_enc": True,
     },
-    "Deep Learning (ANN)": {
-        "file":      "deep_learning_ANN_model.pkl",
-        "col_case":  "original",
-        "label_enc": True,
-        "is_ann":    True,
-        "ann_pipe":  "preprocess_pipeline_ann.pkl",
-    },
 }
 
 LABEL_MAP     = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
-ANN_LABEL_MAP = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
 
 # ─────────────────────────────────────────────────────────────────────────────
 # MEMORY FIX 3: Limit the in-memory model cache.
-#   Keeping ALL 7 models loaded simultaneously (especially RF + XGBoost + ANN)
+#   Keeping ALL 6 models loaded simultaneously (especially RF + XGBoost)
 #   easily exceeds 512 MB.  We use an LRU-style cache that evicts the least
 #   recently used model when the cap is reached, freeing memory via gc.collect().
 # ─────────────────────────────────────────────────────────────────────────────
 from collections import OrderedDict
 
 # Max models kept in memory at once.  3 keeps us safely under 512 MB
-# even with the larger sklearn models.  ANN is never cached (see below).
+# even with the larger sklearn models.
 _MAX_CACHED = 3
 _cache: OrderedDict = OrderedDict()
 
@@ -227,20 +200,10 @@ def _load_pkl(path):
 
 
 def load_model(name):
-    """Load a model with LRU caching.  ANN is never cached to avoid holding
-    ~300 MB of TF graph in memory between requests."""
+    """Load a model with LRU caching."""
     cfg = REGISTRY[name]
 
-    if cfg.get("is_ann"):
-        # MEMORY FIX 4: Never cache ANN. Load → predict → discard + gc.collect()
-        if not _check_tf():
-            raise RuntimeError("ANN requires TensorFlow which is not installed.")
-        path = os.path.join(BASE, cfg["file"])
-        if not os.path.exists(path):
-            raise FileNotFoundError(f"Model file '{cfg['file']}' not found on server.")
-        return _load_pkl(path)   # caller must del + gc.collect() after use
 
-    # For non-ANN models: LRU cache
     if name in _cache:
         _cache.move_to_end(name)   # mark as recently used
         return _cache[name]
@@ -300,67 +263,8 @@ def _get_final_estimator(model):
     return model
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-# MEMORY FIX 5: Cache the ANN preprocessing pipeline separately (it's small,
-#   ~1 MB) so we don't reload it from disk on every ANN prediction.
-# ─────────────────────────────────────────────────────────────────────────────
-_ann_pipe_cache = None
-
-def _build_ann_input(df: pd.DataFrame) -> np.ndarray:
-    global _ann_pipe_cache
-    if _ann_pipe_cache is None:
-        for pipe_file in ["preprocess_pipeline_ann.pkl", "preprocess_pipeline.pkl"]:
-            pipe_path = os.path.join(BASE, pipe_file)
-            if os.path.exists(pipe_path):
-                try:
-                    _ann_pipe_cache = _load_pkl(pipe_path)
-                    break
-                except Exception as e:
-                    print(f"⚠️ {pipe_file} failed: {e}")
-
-    if _ann_pipe_cache is not None:
-        try:
-            X = _ann_pipe_cache.transform(df)
-            if hasattr(X, "toarray"):
-                X = X.toarray()
-            return np.array(X, dtype="float32")
-        except Exception as e:
-            print(f"⚠️ ANN pipeline transform failed: {e}")
-
-    numeric_cols = [c for c in df.columns if c.lower() in NUMERIC_SET_LOWER]
-    return df[numeric_cols].values.astype("float32")
-
-
-def _ann_predict(features: dict) -> dict:
-    """Load ANN, predict, then immediately free memory."""
-    model = load_model("Deep Learning (ANN)")
-    try:
-        df  = build_row(features, "original")
-        X   = _build_ann_input(df)
-        raw = model.predict(X, verbose=0)
-        if raw.ndim > 1 and raw.shape[1] > 1:
-            probs = raw[0]
-            idx   = int(np.argmax(probs))
-            pred  = ANN_LABEL_MAP.get(idx, str(idx))
-            proba = {ANN_LABEL_MAP.get(i, str(i)): round(float(probs[i]) * 100, 2)
-                     for i in range(len(probs))}
-        else:
-            prob_pos = float(np.clip(raw.flatten()[0], 0.0, 1.0))
-            pred  = "Regulated Drug" if prob_pos >= 0.5 else "Non-Regulated Drug"
-            proba = {"Regulated Drug": round(prob_pos * 100, 2),
-                     "Non-Regulated Drug": round((1.0 - prob_pos) * 100, 2)}
-        return {"prediction": pred, "probability": proba}
-    finally:
-        # MEMORY FIX 4 (continued): discard ANN model object + collect immediately
-        del model
-        gc.collect()
-
-
 def predict_one(name: str, features: dict) -> dict:
     cfg = REGISTRY[name]
-
-    if cfg.get("is_ann"):
-        return _ann_predict(features)
 
     model    = load_model(name)
     df       = build_row(features, cfg["col_case"])
@@ -446,13 +350,8 @@ def predict_all():
 
         votes, models = {}, {}
 
-        # ─────────────────────────────────────────────────────────────────────
-        # MEMORY FIX 7: In predict/all, run non-ANN models first, then ANN last.
-        #   This avoids TF being resident in RAM while sklearn models are loaded.
-        #   Between each model we run gc.collect() to free intermediate objects.
-        # ─────────────────────────────────────────────────────────────────────
-        ordered = [n for n in REGISTRY if not REGISTRY[n].get("is_ann")] + \
-                  [n for n in REGISTRY if REGISTRY[n].get("is_ann")]
+        # Run models sequentially with GC between each to stay under 512 MB
+        ordered = list(REGISTRY.keys())
 
         for name in ordered:
             try:
@@ -493,7 +392,7 @@ def debug():
         "platform":  platform.platform(),
         "base":      BASE,
         "cache":     list(_cache.keys()),
-        "tf_loaded": _TF_AVAILABLE,
+
     }
 
     pkgs = {}

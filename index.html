@@ -537,7 +537,7 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2);}
 <div class="hero">
   <div class="hero-badge">🧬 Machine Learning Platform</div>
   <h1>Drug <span class="hl">Regulatory</span><br>Classification</h1>
-  <p>Predict whether a drug is <em>Regulated</em> or <em>Non-Regulated</em> using 7 trained ML models — with single-model precision or ensemble voting.</p>
+  <p>Predict whether a drug is <em>Regulated</em> or <em>Non-Regulated</em> using 6 trained ML models — with single-model precision or ensemble voting.</p>
 </div>
 
 <!-- ══ MODE SELECTOR ═════════════════════════════════════════════════════════ -->
@@ -558,7 +558,6 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2);}
   <div class="mchip"        data-m="KNN"                   onclick="selModel(this)"><span class="chip-dot"></span>KNN</div>
   <div class="mchip"        data-m="SVM"                   onclick="selModel(this)"><span class="chip-dot"></span>SVM</div>
   <div class="mchip"        data-m="XGBoost"               onclick="selModel(this)"><span class="chip-dot"></span>XGBoost</div>
-  <div class="mchip"        data-m="Deep Learning (ANN)"   onclick="selModel(this)"><span class="chip-dot"></span>Deep Learning (ANN)</div>
 </div>
 
 <!-- ══ MAIN LAYOUT ═══════════════════════════════════════════════════════════ -->
@@ -838,7 +837,6 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2);}
           <div class="stat-row"><span class="stat-name">KNN</span>                  <span class="stat-type">sklearn</span><span class="stat-badge chk" id="s3">⋯</span></div>
           <div class="stat-row"><span class="stat-name">SVM</span>                  <span class="stat-type">sklearn+le</span><span class="stat-badge chk" id="s4">⋯</span></div>
           <div class="stat-row"><span class="stat-name">XGBoost</span>              <span class="stat-type">xgboost</span><span class="stat-badge chk" id="s5">⋯</span></div>
-          <div class="stat-row"><span class="stat-name">Deep Learning (ANN)</span>  <span class="stat-type">keras</span><span class="stat-badge chk" id="s6">⋯</span></div>
         </div>
       </div>
 
@@ -862,7 +860,7 @@ input[type=range]::-webkit-slider-thumb:hover{transform:scale(1.2);}
 ═══════════════════════════════════════════════════════════════════════════════ -->
 <script>
 /* ── CONFIG ──────────────────────────────────────────────────────────────── */
-const MODELS = ['Logistic Regression','Decision Tree','Random Forest','KNN','SVM','XGBoost','Deep Learning (ANN)'];
+const MODELS = ['Logistic Regression','Decision Tree','Random Forest','KNN','SVM','XGBoost'];
 const base   = () => (document.getElementById('flaskUrl').value || 'https://drug-regulatory-').replace(/\/$/,'');
 
 /* ── STATE ───────────────────────────────────────────────────────────────── */
