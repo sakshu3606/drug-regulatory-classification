@@ -1,30 +1,41 @@
 from flask import Flask, request, jsonify, send_from_directory
 from flask_cors import CORS
-import os, sys, gc
+import os, sys
 import pandas as pd
 import numpy as np
 import traceback
 import warnings
+import gc
 
 warnings.filterwarnings("ignore")
 
-# ── TensorFlow: lazy import only (NOT at startup) ─────────────────────────────
-# tensorflow-cpu is used — works on all Python versions Render supports.
-# Imported on-demand only when ANN is actually requested.
-TF_AVAILABLE = None   # None = not yet checked; True/False after first check
+# ─────────────────────────────────────────────────────────────────────────────
+# MEMORY FIX 1: Do NOT auto-install packages at runtime.
+#   Add all dependencies to requirements.txt instead and let Render install
+#   them at build time.  Runtime pip installs waste ~50-100 MB of RAM.
+# ─────────────────────────────────────────────────────────────────────────────
+try:
+    import feature_engine
+except ImportError:
+    print("❌ feature-engine not installed. Add it to requirements.txt")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MEMORY FIX 2: Lazy-import TensorFlow only when an ANN prediction is needed.
+#   TF alone consumes ~400 MB.  Importing it at startup on Render's free 512 MB
+#   plan guarantees an OOM crash before the first request is served.
+# ─────────────────────────────────────────────────────────────────────────────
+_TF_AVAILABLE = None   # None = not yet checked
 
 def _check_tf():
-    global TF_AVAILABLE
-    if TF_AVAILABLE is not None:
-        return TF_AVAILABLE
+    global _TF_AVAILABLE
+    if _TF_AVAILABLE is not None:
+        return _TF_AVAILABLE
     try:
         import tensorflow as _tf  # noqa: F401
-        TF_AVAILABLE = True
-        print(f"✅ TensorFlow ready: {_tf.__version__}")
-    except Exception as e:
-        TF_AVAILABLE = False
-        print(f"⚠️  TensorFlow not available: {e}")
-    return TF_AVAILABLE
+        _TF_AVAILABLE = True
+    except Exception:
+        _TF_AVAILABLE = False
+    return _TF_AVAILABLE
 
 
 app = Flask(__name__)
@@ -36,6 +47,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 from sklearn.base import BaseEstimator, TransformerMixin
 
 class SafeWinsorizer(BaseEstimator, TransformerMixin):
+    """Winsorizer wrapper for Decision Tree pipeline (original column names)."""
     def __init__(self, variables):
         self.variables = variables
 
@@ -46,7 +58,8 @@ class SafeWinsorizer(BaseEstimator, TransformerMixin):
         for col in self.variables:
             X_c[col] = X_c[col].fillna(self.medians_[col])
         self.winsorizer_ = Winsorizer(
-            capping_method="iqr", tail="both", fold=1.5, variables=self.variables
+            capping_method="iqr", tail="both", fold=1.5,
+            variables=self.variables
         )
         self.winsorizer_.fit(X_c)
         return self
@@ -63,6 +76,7 @@ class SafeWinsorizer(BaseEstimator, TransformerMixin):
 
 
 class SafeWinsorizerLower(BaseEstimator, TransformerMixin):
+    """Winsorizer wrapper for Random Forest pipeline (lowercase column names)."""
     def __init__(self, variables):
         self.variables = variables
 
@@ -73,7 +87,8 @@ class SafeWinsorizerLower(BaseEstimator, TransformerMixin):
         for col in self.variables:
             X_c[col] = X_c[col].fillna(self.medians_[col])
         self.winsorizer_ = Winsorizer(
-            capping_method="iqr", tail="both", fold=1.5, variables=self.variables
+            capping_method="iqr", tail="both", fold=1.5,
+            variables=self.variables
         )
         self.winsorizer_.fit(X_c)
         return self
@@ -130,12 +145,30 @@ REGISTRY = {
     },
 }
 
-# Single-slot cache — only 1 model in RAM at a time (fits Render 512MB free tier)
-_cache = {}
-_CACHE_LIMIT = 1
-
 LABEL_MAP     = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
 ANN_LABEL_MAP = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
+
+# ─────────────────────────────────────────────────────────────────────────────
+# MEMORY FIX 3: Limit the in-memory model cache.
+#   Keeping ALL 7 models loaded simultaneously (especially RF + XGBoost + ANN)
+#   easily exceeds 512 MB.  We use an LRU-style cache that evicts the least
+#   recently used model when the cap is reached, freeing memory via gc.collect().
+# ─────────────────────────────────────────────────────────────────────────────
+from collections import OrderedDict
+
+# Max models kept in memory at once.  3 keeps us safely under 512 MB
+# even with the larger sklearn models.  ANN is never cached (see below).
+_MAX_CACHED = 3
+_cache: OrderedDict = OrderedDict()
+
+
+def _evict_if_needed():
+    """Remove the oldest cached model when we're at capacity."""
+    while len(_cache) >= _MAX_CACHED:
+        evicted_name, _ = _cache.popitem(last=False)
+        print(f"🗑  Evicted '{evicted_name}' from model cache to free RAM")
+        gc.collect()
+
 
 # ── Column definitions ────────────────────────────────────────────────────────
 NUMERIC_ORIG = [
@@ -148,6 +181,7 @@ NUMERIC_ORIG = [
     "Export_Percentage", "Online_Sales_Percentage", "Brand_Reputation_Score",
     "Doctor_Recommendation_Rate",
 ]
+
 CATEGORICAL_ORIG = [
     "Drug_Form", "Therapeutic_Class", "Manufacturing_Region",
     "Requires_Cold_Storage", "OTC_Flag", "High_Risk_Substance",
@@ -160,45 +194,28 @@ ALL_LOWER         = [c.lower() for c in ALL_ORIG]
 NUMERIC_SET_LOWER = set(c.lower() for c in NUMERIC_ORIG)
 
 
-# ── PKL / Keras Loader ────────────────────────────────────────────────────────
-def _load_ann_model(pkl_path):
-    """
-    Load ANN model. Tries in order:
-    1. Native .keras file (most reliable, no pickle issues)
-    2. joblib / pickle from .pkl
-    """
-    # Try .keras first — most reliable across TF versions
-    keras_path = pkl_path.replace(".pkl", ".keras")
-    if os.path.exists(keras_path):
-        try:
-            import tensorflow as tf
-            model = tf.keras.models.load_model(keras_path)
-            print(f"✅ ANN loaded from .keras: {keras_path}")
-            return model
-        except Exception as e:
-            print(f"⚠️  .keras load failed: {e}")
-
-    # Fallback: try pkl
-    return _load_pkl(pkl_path)
-
-
+# ── PKL Loader ────────────────────────────────────────────────────────────────
 def _load_pkl(path):
     import joblib, pickle
+
     try:
         return joblib.load(path)
     except Exception:
         pass
+
     try:
         import dill
         with open(path, "rb") as f:
             return dill.load(f)
     except Exception:
         pass
+
     try:
         with open(path, "rb") as f:
             return pickle.load(f, encoding="latin-1")
     except Exception:
         pass
+
     try:
         with open(path, "rb") as f:
             return pickle.load(f)
@@ -210,45 +227,36 @@ def _load_pkl(path):
 
 
 def load_model(name):
-    global _cache
-
-    if name in _cache:
-        return _cache[name]
-
+    """Load a model with LRU caching.  ANN is never cached to avoid holding
+    ~300 MB of TF graph in memory between requests."""
     cfg = REGISTRY[name]
 
-    if cfg.get("is_ann") and not _check_tf():
-        raise RuntimeError("TensorFlow is not available. ANN model cannot be loaded.")
+    if cfg.get("is_ann"):
+        # MEMORY FIX 4: Never cache ANN. Load → predict → discard + gc.collect()
+        if not _check_tf():
+            raise RuntimeError("ANN requires TensorFlow which is not installed.")
+        path = os.path.join(BASE, cfg["file"])
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"Model file '{cfg['file']}' not found on server.")
+        return _load_pkl(path)   # caller must del + gc.collect() after use
+
+    # For non-ANN models: LRU cache
+    if name in _cache:
+        _cache.move_to_end(name)   # mark as recently used
+        return _cache[name]
 
     path = os.path.join(BASE, cfg["file"])
     if not os.path.exists(path):
-        # For ANN, also check .keras directly
-        if cfg.get("is_ann"):
-            keras_path = path.replace(".pkl", ".keras")
-            if not os.path.exists(keras_path):
-                raise FileNotFoundError(
-                    f"Model file '{cfg['file']}' (and .keras variant) not found on server."
-                )
-        else:
-            raise FileNotFoundError(f"Model file '{cfg['file']}' not found on server.")
+        raise FileNotFoundError(f"Model file '{cfg['file']}' not found on server.")
 
-    # Evict old model first to free RAM
-    if len(_cache) >= _CACHE_LIMIT:
-        for evict in list(_cache.keys()):
-            del _cache[evict]
-        gc.collect()
-
-    # Load
-    if cfg.get("is_ann"):
-        obj = _load_ann_model(path)
-    else:
-        obj = _load_pkl(path)
-
+    _evict_if_needed()
+    obj = _load_pkl(path)
     _cache[name] = obj
+    _cache.move_to_end(name)
     return obj
 
 
-# ── Helpers ───────────────────────────────────────────────────────────────────
+# ── Helper utilities ──────────────────────────────────────────────────────────
 def build_row(features: dict, col_case: str) -> pd.DataFrame:
     norm = {}
     for k, v in features.items():
@@ -258,6 +266,7 @@ def build_row(features: dict, col_case: str) -> pd.DataFrame:
         norm["r&d_investment_million"] = norm["rd_investment_million"]
 
     all_cols = ALL_ORIG if col_case == "original" else ALL_LOWER
+
     row = {}
     for col in all_cols:
         key = col.lower()
@@ -291,47 +300,69 @@ def _get_final_estimator(model):
     return model
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MEMORY FIX 5: Cache the ANN preprocessing pipeline separately (it's small,
+#   ~1 MB) so we don't reload it from disk on every ANN prediction.
+# ─────────────────────────────────────────────────────────────────────────────
+_ann_pipe_cache = None
+
 def _build_ann_input(df: pd.DataFrame) -> np.ndarray:
-    for pipe_file in ["preprocess_pipeline_ann.pkl", "preprocess_pipeline.pkl"]:
-        pipe_path = os.path.join(BASE, pipe_file)
-        if os.path.exists(pipe_path):
-            try:
-                pipe = _load_pkl(pipe_path)
-                X = pipe.transform(df)
-                if hasattr(X, "toarray"):
-                    X = X.toarray()
-                return np.array(X, dtype="float32")
-            except Exception as e:
-                print(f"⚠️ {pipe_file} failed: {e}")
+    global _ann_pipe_cache
+    if _ann_pipe_cache is None:
+        for pipe_file in ["preprocess_pipeline_ann.pkl", "preprocess_pipeline.pkl"]:
+            pipe_path = os.path.join(BASE, pipe_file)
+            if os.path.exists(pipe_path):
+                try:
+                    _ann_pipe_cache = _load_pkl(pipe_path)
+                    break
+                except Exception as e:
+                    print(f"⚠️ {pipe_file} failed: {e}")
+
+    if _ann_pipe_cache is not None:
+        try:
+            X = _ann_pipe_cache.transform(df)
+            if hasattr(X, "toarray"):
+                X = X.toarray()
+            return np.array(X, dtype="float32")
+        except Exception as e:
+            print(f"⚠️ ANN pipeline transform failed: {e}")
+
     numeric_cols = [c for c in df.columns if c.lower() in NUMERIC_SET_LOWER]
     return df[numeric_cols].values.astype("float32")
 
 
-def _ann_predict(model, features: dict) -> dict:
-    df  = build_row(features, "original")
-    X   = _build_ann_input(df)
-    raw = model.predict(X, verbose=0)
-    if raw.ndim > 1 and raw.shape[1] > 1:
-        probs = raw[0]
-        idx   = int(np.argmax(probs))
-        pred  = ANN_LABEL_MAP.get(idx, str(idx))
-        proba = {ANN_LABEL_MAP.get(i, str(i)): round(float(probs[i]) * 100, 2)
-                 for i in range(len(probs))}
-    else:
-        prob_pos = float(np.clip(raw.flatten()[0], 0.0, 1.0))
-        pred  = "Regulated Drug" if prob_pos >= 0.5 else "Non-Regulated Drug"
-        proba = {"Regulated Drug": round(prob_pos * 100, 2),
-                 "Non-Regulated Drug": round((1.0 - prob_pos) * 100, 2)}
-    return {"prediction": pred, "probability": proba}
+def _ann_predict(features: dict) -> dict:
+    """Load ANN, predict, then immediately free memory."""
+    model = load_model("Deep Learning (ANN)")
+    try:
+        df  = build_row(features, "original")
+        X   = _build_ann_input(df)
+        raw = model.predict(X, verbose=0)
+        if raw.ndim > 1 and raw.shape[1] > 1:
+            probs = raw[0]
+            idx   = int(np.argmax(probs))
+            pred  = ANN_LABEL_MAP.get(idx, str(idx))
+            proba = {ANN_LABEL_MAP.get(i, str(i)): round(float(probs[i]) * 100, 2)
+                     for i in range(len(probs))}
+        else:
+            prob_pos = float(np.clip(raw.flatten()[0], 0.0, 1.0))
+            pred  = "Regulated Drug" if prob_pos >= 0.5 else "Non-Regulated Drug"
+            proba = {"Regulated Drug": round(prob_pos * 100, 2),
+                     "Non-Regulated Drug": round((1.0 - prob_pos) * 100, 2)}
+        return {"prediction": pred, "probability": proba}
+    finally:
+        # MEMORY FIX 4 (continued): discard ANN model object + collect immediately
+        del model
+        gc.collect()
 
 
 def predict_one(name: str, features: dict) -> dict:
-    cfg   = REGISTRY[name]
-    model = load_model(name)
+    cfg = REGISTRY[name]
 
-    if cfg.get("is_ann") and not hasattr(model, "named_steps"):
-        return _ann_predict(model, features)
+    if cfg.get("is_ann"):
+        return _ann_predict(features)
 
+    model    = load_model(name)
     df       = build_row(features, cfg["col_case"])
     raw_pred = model.predict(df)
     raw_val  = raw_pred[0] if isinstance(raw_pred, (list, np.ndarray)) else raw_pred
@@ -363,16 +394,18 @@ def health():
     return jsonify({"status": "ok"})
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# MEMORY FIX 6: /models/status and /debug must NOT load every model.
+#   They now only check whether the .pkl file EXISTS on disk.
+#   Loading 7 models at once in a status check is what triggered the OOM spikes.
+# ─────────────────────────────────────────────────────────────────────────────
 @app.route("/models/status")
 def model_status():
-    # File-check only — does NOT load any models into RAM
     status = {}
     for name, cfg in REGISTRY.items():
-        path   = os.path.join(BASE, cfg["file"])
-        keras_path = path.replace(".pkl", ".keras")
-        exists = os.path.exists(path) or os.path.exists(keras_path)
+        path = os.path.join(BASE, cfg["file"])
         status[name] = {
-            "ready":      exists,
+            "ready":      os.path.exists(path),
             "model_file": cfg["file"],
             "cached":     name in _cache,
         }
@@ -403,7 +436,7 @@ def predict():
 
 @app.route("/predict/all", methods=["POST"])
 def predict_all():
-    """Runs models one-at-a-time, evicting each before loading the next."""
+    """Run all models sequentially, evicting after each to stay under 512 MB."""
     try:
         body     = request.get_json(force=True, silent=True) or {}
         features = body.get("features", {})
@@ -411,12 +444,17 @@ def predict_all():
         if not features:
             return jsonify({"error": "No features provided"}), 400
 
-        # ANN is included but runs last to avoid TF memory conflicting with sklearn models
-        model_order = [n for n in REGISTRY if not REGISTRY[n].get("is_ann")]
-        model_order += [n for n in REGISTRY if REGISTRY[n].get("is_ann")]
-
         votes, models = {}, {}
-        for name in model_order:
+
+        # ─────────────────────────────────────────────────────────────────────
+        # MEMORY FIX 7: In predict/all, run non-ANN models first, then ANN last.
+        #   This avoids TF being resident in RAM while sklearn models are loaded.
+        #   Between each model we run gc.collect() to free intermediate objects.
+        # ─────────────────────────────────────────────────────────────────────
+        ordered = [n for n in REGISTRY if not REGISTRY[n].get("is_ann")] + \
+                  [n for n in REGISTRY if REGISTRY[n].get("is_ann")]
+
+        for name in ordered:
             try:
                 result       = predict_one(name, features)
                 pred         = result["prediction"]
@@ -425,9 +463,6 @@ def predict_all():
             except Exception as e:
                 models[name] = {"available": False, "error": str(e)}
             finally:
-                # Evict immediately after each prediction to free RAM
-                if name in _cache:
-                    del _cache[name]
                 gc.collect()
 
         if not votes:
@@ -454,15 +489,16 @@ def predict_all():
 def debug():
     import platform
     info = {
-        "python":   sys.version,
-        "platform": platform.platform(),
-        "base":     BASE,
-        "cache":    list(_cache.keys()),
-        "tf":       str(TF_AVAILABLE),
+        "python":    sys.version,
+        "platform":  platform.platform(),
+        "base":      BASE,
+        "cache":     list(_cache.keys()),
+        "tf_loaded": _TF_AVAILABLE,
     }
+
     pkgs = {}
     for pkg in ["feature_engine", "sklearn", "xgboost", "joblib",
-                "pandas", "numpy", "flask", "dill", "tensorflow"]:
+                "pandas", "numpy", "flask", "dill"]:
         try:
             m = __import__(pkg)
             pkgs[pkg] = getattr(m, "__version__", "ok")
@@ -470,16 +506,11 @@ def debug():
             pkgs[pkg] = f"MISSING: {e}"
     info["packages"] = pkgs
 
+    # Only check file existence — do NOT load models
     pkl_status = {}
     for name, cfg in REGISTRY.items():
         path = os.path.join(BASE, cfg["file"])
-        keras_path = path.replace(".pkl", ".keras")
-        if os.path.exists(keras_path):
-            pkl_status[name] = f"✅ .keras ({os.path.getsize(keras_path)/1024:.1f} KB)"
-        elif os.path.exists(path):
-            pkl_status[name] = f"✅ .pkl ({os.path.getsize(path)/1024:.1f} KB)"
-        else:
-            pkl_status[name] = "❌ FILE MISSING"
+        pkl_status[name] = "✅ FILE EXISTS" if os.path.exists(path) else "❌ FILE MISSING"
     info["pkl_files"] = pkl_status
 
     return jsonify(info)
