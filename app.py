@@ -9,8 +9,8 @@ import warnings
 warnings.filterwarnings("ignore")
 
 # ── TensorFlow: lazy import only (NOT at startup) ─────────────────────────────
-# Importing TF at startup wastes ~300-400MB on Render's 512MB free tier.
-# It is imported on-demand only when ANN is actually requested.
+# tensorflow-cpu is used — works on all Python versions Render supports.
+# Imported on-demand only when ANN is actually requested.
 TF_AVAILABLE = None   # None = not yet checked; True/False after first check
 
 def _check_tf():
@@ -20,8 +20,10 @@ def _check_tf():
     try:
         import tensorflow as _tf  # noqa: F401
         TF_AVAILABLE = True
-    except Exception:
+        print(f"✅ TensorFlow ready: {_tf.__version__}")
+    except Exception as e:
         TF_AVAILABLE = False
+        print(f"⚠️  TensorFlow not available: {e}")
     return TF_AVAILABLE
 
 
@@ -34,7 +36,6 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 from sklearn.base import BaseEstimator, TransformerMixin
 
 class SafeWinsorizer(BaseEstimator, TransformerMixin):
-    """Winsorizer wrapper for Decision Tree pipeline (original column names)."""
     def __init__(self, variables):
         self.variables = variables
 
@@ -62,7 +63,6 @@ class SafeWinsorizer(BaseEstimator, TransformerMixin):
 
 
 class SafeWinsorizerLower(BaseEstimator, TransformerMixin):
-    """Winsorizer wrapper for Random Forest pipeline (lowercase column names)."""
     def __init__(self, variables):
         self.variables = variables
 
@@ -130,11 +130,9 @@ REGISTRY = {
     },
 }
 
-# ── MEMORY: Only ONE model is kept in memory at a time ───────────────────────
-# Render free tier has 512MB. Keeping all 7 models loaded simultaneously
-# causes OOM crashes. We use a single-slot LRU-1 cache instead.
-_cache = {}          # { name: model_object }
-_CACHE_LIMIT = 1     # max models in memory simultaneously (increase if upgraded)
+# Single-slot cache — only 1 model in RAM at a time (fits Render 512MB free tier)
+_cache = {}
+_CACHE_LIMIT = 1
 
 LABEL_MAP     = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
 ANN_LABEL_MAP = {0: "Non-Regulated Drug", 1: "Regulated Drug"}
@@ -162,7 +160,28 @@ ALL_LOWER         = [c.lower() for c in ALL_ORIG]
 NUMERIC_SET_LOWER = set(c.lower() for c in NUMERIC_ORIG)
 
 
-# ── PKL Loader ────────────────────────────────────────────────────────────────
+# ── PKL / Keras Loader ────────────────────────────────────────────────────────
+def _load_ann_model(pkl_path):
+    """
+    Load ANN model. Tries in order:
+    1. Native .keras file (most reliable, no pickle issues)
+    2. joblib / pickle from .pkl
+    """
+    # Try .keras first — most reliable across TF versions
+    keras_path = pkl_path.replace(".pkl", ".keras")
+    if os.path.exists(keras_path):
+        try:
+            import tensorflow as tf
+            model = tf.keras.models.load_model(keras_path)
+            print(f"✅ ANN loaded from .keras: {keras_path}")
+            return model
+        except Exception as e:
+            print(f"⚠️  .keras load failed: {e}")
+
+    # Fallback: try pkl
+    return _load_pkl(pkl_path)
+
+
 def _load_pkl(path):
     import joblib, pickle
     try:
@@ -191,12 +210,6 @@ def _load_pkl(path):
 
 
 def load_model(name):
-    """
-    Load a model with a single-slot cache.
-    When a new model is requested, the old one is evicted and gc.collect() is
-    called so Python frees the RAM before loading the next model.
-    This keeps peak memory use at ~1 model at a time instead of 7.
-    """
     global _cache
 
     if name in _cache:
@@ -204,22 +217,33 @@ def load_model(name):
 
     cfg = REGISTRY[name]
 
-    # ANN requires TF — check lazily
     if cfg.get("is_ann") and not _check_tf():
-        raise RuntimeError("ANN requires TensorFlow which is not installed.")
+        raise RuntimeError("TensorFlow is not available. ANN model cannot be loaded.")
 
     path = os.path.join(BASE, cfg["file"])
     if not os.path.exists(path):
-        raise FileNotFoundError(f"Model file '{cfg['file']}' not found on server.")
+        # For ANN, also check .keras directly
+        if cfg.get("is_ann"):
+            keras_path = path.replace(".pkl", ".keras")
+            if not os.path.exists(keras_path):
+                raise FileNotFoundError(
+                    f"Model file '{cfg['file']}' (and .keras variant) not found on server."
+                )
+        else:
+            raise FileNotFoundError(f"Model file '{cfg['file']}' not found on server.")
 
-    # Evict old models from cache if at limit
+    # Evict old model first to free RAM
     if len(_cache) >= _CACHE_LIMIT:
-        evict_names = list(_cache.keys())
-        for evict in evict_names:
+        for evict in list(_cache.keys()):
             del _cache[evict]
-        gc.collect()   # actually release the RAM
+        gc.collect()
 
-    obj = _load_pkl(path)
+    # Load
+    if cfg.get("is_ann"):
+        obj = _load_ann_model(path)
+    else:
+        obj = _load_pkl(path)
+
     _cache[name] = obj
     return obj
 
@@ -234,7 +258,6 @@ def build_row(features: dict, col_case: str) -> pd.DataFrame:
         norm["r&d_investment_million"] = norm["rd_investment_million"]
 
     all_cols = ALL_ORIG if col_case == "original" else ALL_LOWER
-
     row = {}
     for col in all_cols:
         key = col.lower()
@@ -324,7 +347,6 @@ def predict_one(name: str, features: dict) -> dict:
             proba       = {class_names[i]: round(float(p[i]) * 100, 2) for i in range(len(p))}
         except Exception as e:
             print(f"⚠️ predict_proba failed for {name}: {e}")
-            proba = None
 
     return {"prediction": pred, "probability": proba}
 
@@ -338,17 +360,17 @@ def index():
 
 @app.route("/health")
 def health():
-    # Lightweight: does NOT load any models
     return jsonify({"status": "ok"})
 
 
 @app.route("/models/status")
 def model_status():
-    # MEMORY SAFE: only check file existence, do NOT load models
+    # File-check only — does NOT load any models into RAM
     status = {}
     for name, cfg in REGISTRY.items():
         path   = os.path.join(BASE, cfg["file"])
-        exists = os.path.exists(path)
+        keras_path = path.replace(".pkl", ".keras")
+        exists = os.path.exists(path) or os.path.exists(keras_path)
         status[name] = {
             "ready":      exists,
             "model_file": cfg["file"],
@@ -381,10 +403,7 @@ def predict():
 
 @app.route("/predict/all", methods=["POST"])
 def predict_all():
-    """
-    MEMORY-SAFE ensemble: runs models one-at-a-time and evicts each before
-    loading the next. Skips ANN on free tier to avoid TF memory spike.
-    """
+    """Runs models one-at-a-time, evicting each before loading the next."""
     try:
         body     = request.get_json(force=True, silent=True) or {}
         features = body.get("features", {})
@@ -392,18 +411,12 @@ def predict_all():
         if not features:
             return jsonify({"error": "No features provided"}), 400
 
-        # Skip ANN in ensemble by default to stay within 512MB
-        skip_ann = not bool(os.environ.get("ENABLE_ANN_ENSEMBLE"))
+        # ANN is included but runs last to avoid TF memory conflicting with sklearn models
+        model_order = [n for n in REGISTRY if not REGISTRY[n].get("is_ann")]
+        model_order += [n for n in REGISTRY if REGISTRY[n].get("is_ann")]
 
         votes, models = {}, {}
-        for name in REGISTRY:
-            if skip_ann and REGISTRY[name].get("is_ann"):
-                models[name] = {
-                    "available": False,
-                    "error": "ANN skipped in ensemble to conserve memory. "
-                             "Use /predict with model='Deep Learning (ANN)' directly."
-                }
-                continue
+        for name in model_order:
             try:
                 result       = predict_one(name, features)
                 pred         = result["prediction"]
@@ -445,11 +458,11 @@ def debug():
         "platform": platform.platform(),
         "base":     BASE,
         "cache":    list(_cache.keys()),
+        "tf":       str(TF_AVAILABLE),
     }
-
     pkgs = {}
     for pkg in ["feature_engine", "sklearn", "xgboost", "joblib",
-                "pandas", "numpy", "flask", "dill"]:
+                "pandas", "numpy", "flask", "dill", "tensorflow"]:
         try:
             m = __import__(pkg)
             pkgs[pkg] = getattr(m, "__version__", "ok")
@@ -457,15 +470,16 @@ def debug():
             pkgs[pkg] = f"MISSING: {e}"
     info["packages"] = pkgs
 
-    # MEMORY SAFE: only check file existence, do NOT load models
     pkl_status = {}
     for name, cfg in REGISTRY.items():
         path = os.path.join(BASE, cfg["file"])
-        if not os.path.exists(path):
-            pkl_status[name] = "❌ FILE MISSING"
+        keras_path = path.replace(".pkl", ".keras")
+        if os.path.exists(keras_path):
+            pkl_status[name] = f"✅ .keras ({os.path.getsize(keras_path)/1024:.1f} KB)"
+        elif os.path.exists(path):
+            pkl_status[name] = f"✅ .pkl ({os.path.getsize(path)/1024:.1f} KB)"
         else:
-            size_kb = os.path.getsize(path) / 1024
-            pkl_status[name] = f"✅ FILE OK ({size_kb:.1f} KB)"
+            pkl_status[name] = "❌ FILE MISSING"
     info["pkl_files"] = pkl_status
 
     return jsonify(info)
