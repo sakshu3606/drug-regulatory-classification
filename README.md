@@ -145,6 +145,3 @@ The platform is deployed and publicly accessible at:
 
 ---
 
-
-**Sakshi** — Data Analyst  
-[GitHub Profile](https://github.com/sakshu3606)
