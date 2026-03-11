@@ -1,173 +1,150 @@
-# 🧬 PharmAI — Drug Regulatory Intelligence Platform
+# PharmAI — Drug Regulatory Classification
 
-> **Predict whether a pharmaceutical drug is Regulated or Non-Regulated using an ensemble of 7 Machine Learning models — with real-time classification, confidence scoring, and interactive analytics.**
+> Predict whether a pharmaceutical drug is **Regulated** or **Non-Regulated** using a suite of 6 trained machine learning models with single-model precision and ensemble voting.
 
-[![Live Demo](https://img.shields.io/badge/🚀%20Live%20Demo-PharmAI-blue?style=for-the-badge)](https://pharmai-drug-classification-1.onrender.com/)
-[![Python](https://img.shields.io/badge/Python-3.10-blue?style=flat-square&logo=python)](https://www.python.org/)
-[![Scikit-Learn](https://img.shields.io/badge/Scikit--Learn-ML-orange?style=flat-square&logo=scikit-learn)](https://scikit-learn.org/)
-[![XGBoost](https://img.shields.io/badge/XGBoost-Boosting-red?style=flat-square)](https://xgboost.readthedocs.io/)
-[![Power BI](https://img.shields.io/badge/Power%20BI-Dashboard-yellow?style=flat-square&logo=powerbi)](https://powerbi.microsoft.com/)
-[![Deployed on Render](https://img.shields.io/badge/Deployed%20on-Render-46E3B7?style=flat-square&logo=render)](https://render.com/)
+**Live Platform:** [https://pharmai-drug-classification-1.onrender.com](https://pharmai-drug-classification-1.onrender.com)
 
 ---
 
-## 📌 Project Overview
+## Overview
 
-**PharmAI** is an end-to-end pharmaceutical data intelligence platform built to classify drugs as **Regulated** or **Non-Regulated** based on 29 clinical, financial, and distribution features. The platform combines rigorous data analysis, multiple trained ML models, ensemble voting logic, and an interactive web interface — enabling analysts and stakeholders to make fast, data-driven regulatory decisions.
+PharmAI is an end-to-end drug intelligence platform built to support pharmaceutical compliance and data-driven regulatory decision-making. The system accepts 29 drug properties as input — spanning clinical, financial, distribution, and risk dimensions — and returns a regulatory classification prediction using one or more trained ML models.
 
----
-
-## 🌐 Live Application
-
-🔗 **[https://pharmai-drug-classification-1.onrender.com/](https://pharmai-drug-classification-1.onrender.com/)**
+The platform is designed to assist analysts, researchers, and compliance teams in evaluating drug profiles quickly and accurately without manual review overhead.
 
 ---
 
-## 📊 Dataset
+## Features
 
-| Property | Details |
+- Classify drugs as **Regulated** or **Non-Regulated** based on 29 pharmaceutical features
+- Choose between **6 individual ML models** or run **Ensemble Voting** across all models simultaneously
+- Input 23 numeric features (dosage, pricing, clinical trial phase, abuse potential, etc.) and 6 categorical features (drug form, therapeutic class, manufacturing region, etc.)
+- Real-time prediction with a live **Prediction History** tracker
+- Model Registry panel displaying the status of all serialized `.pkl` models on the server
+- Sample data loader for quick demonstration and testing
+
+---
+
+## Machine Learning Models
+
+| Model | Type |
 |---|---|
-| **Target Variable** | Drug Regulatory Status — `Regulated` / `Non-Regulated` |
-| **Total Features** | 29 (23 Numeric + 6 Categorical) |
-| **Key Features** | Dosage, Price Per Unit, Clinical Trial Phase, Side Effect Severity, Abuse Potential, Regulatory Risk Score, Prescription Rate, R&D Investment, Recall History, Adverse Event Reports, Therapeutic Class, Manufacturing Region, and more |
+| Logistic Regression | Linear Classifier |
+| Decision Tree | Tree-based Classifier |
+| Random Forest | Ensemble — Bagging |
+| K-Nearest Neighbors (KNN) | Instance-based Classifier |
+| Support Vector Machine (SVM) | Margin-based Classifier |
+| XGBoost | Ensemble — Boosting |
+
+Each model was trained, evaluated, and serialized independently. The ensemble mode aggregates predictions from all 6 models using majority voting to produce a more robust final output.
 
 ---
 
-## 🤖 ML Models Trained
+## Dataset
 
-| Model | Notebook | Status |
-|---|---|---|
-| Logistic Regression | `logistic_regression.ipynb` | ✅ Deployed |
-| Decision Tree | `decision_tree.ipynb` | ✅ Deployed |
-| Random Forest | `random_forest.ipynb` | ✅ Deployed |
-| K-Nearest Neighbors (KNN) | `knn_model.ipynb` | ✅ Deployed |
-| Support Vector Machine (SVM) | `svm_model.ipynb` | ✅ Deployed |
-| XGBoost | `xgboost.ipynb` | ✅ Deployed |
-| Deep Learning (ANN) | `dl_ann.ipynb` | ✅ Deployed |
+- **File:** `drug_regulatory_classification_dataset.csv`
+- **Features:** 29 total — 23 numeric, 6 categorical
+- **Target:** Binary classification — `Regulated` / `Non-Regulated`
 
-> **Ensemble Voting** — All 7 models can run simultaneously with majority vote classification for maximum prediction confidence.
+**Feature Categories:**
 
----
-
-## ⚙️ Project Workflow
-
-```
-Raw Dataset
-    │
-    ▼
-Exploratory Data Analysis (EDA)
-    │   exporation_data_analysis_EDA.ipynb
-    ▼
-Data Preprocessing & Feature Engineering
-    │   preprocess_pipeline.ipynb → .pkl pipelines per model
-    ▼
-Model Training & Evaluation
-    │   7 individual model notebooks → serialized .pkl files
-    ▼
-Web Application (Interactive UI)
-    │   Single model prediction + Ensemble voting
-    ▼
-Power BI Dashboard
-    │   Pharmaceutical Report.pbix
-    ▼
-Deployed on Render
-    │   https://pharmai-drug-classification-1.onrender.com/
-```
+- *Clinical:* Clinical Trial Phase, Side Effect Severity, Adverse Event Reports, Abuse Potential, Recall History Count
+- *Financial:* Price Per Unit, Production Cost, Marketing Spend, R&D Investment, Annual Sales Volume
+- *Distribution:* Hospital Distribution %, Pharmacy Distribution %, Online Sales %, Export Percentage %, Insurance Coverage %
+- *Regulatory:* Regulatory Risk Score, Prescription Rate, Approval Time, Patent Duration
+- *Categorical:* Drug Form, Therapeutic Class, Manufacturing Region, Requires Cold Storage, OTC availability, High Risk Substance flag
 
 ---
 
-## 📁 Repository Structure
+## Project Structure
 
 ```
 drug-regulatory-classification/
 │
-├── 📓 Notebooks
-│   ├── exporation_data_analysis_EDA.ipynb     # EDA & feature insights
-│   ├── preprocess_pipeline.ipynb              # Data cleaning & transformation
-│   ├── logistic_regression.ipynb
-│   ├── decision_tree.ipynb
-│   ├── random_forest.ipynb
-│   ├── knn_model.ipynb
-│   ├── svm_model.ipynb
-│   ├── xgboost.ipynb
-│   └── dl_ann.ipynb                           # Deep Learning (ANN)
+├── exporation_data_analysis_EDA.ipynb     # Exploratory Data Analysis
+├── preprocess_pipeline.ipynb              # Data preprocessing and feature engineering
 │
-├── 🤖 Trained Models (.pkl)
-│   ├── logistic_model.pkl
-│   ├── decision_tree_model.pkl
-│   ├── random_forest_model.pkl
-│   ├── knn_model.pkl
-│   ├── svm_model.pkl
-│   ├── xgboost_model.pkl
-│   └── deep_learning_ANN_model.pkl
+├── logistic_regression.ipynb              # Logistic Regression training
+├── decision_tree.ipynb                    # Decision Tree training
+├── random_forest.ipynb                    # Random Forest training
+├── knn_model.ipynb                        # KNN training
+├── svm_model.ipynb                        # SVM training
+├── xgboost.ipynb                          # XGBoost training
 │
-├── 🔧 Preprocessing Pipelines (.pkl)
-│   ├── preprocess_pipeline.pkl
-│   ├── preprocess_pipeline_dt.pkl
-│   ├── preprocess_pipeline_rf.pkl
-│   └── preprocess_pipeline_ann.pkl
+├── logistic_model.pkl                     # Serialized Logistic Regression model
+├── decision_tree_model.pkl                # Serialized Decision Tree model
+├── random_forest_model.pkl                # Serialized Random Forest model
+├── knn_model.pkl                          # Serialized KNN model
+├── svm_model.pkl                          # Serialized SVM model
+├── xgboost_model.pkl                      # Serialized XGBoost model
 │
-├── 📊 Analytics
-│   └── Pharmaceutical Report.pbix             # Power BI Dashboard
+├── preprocess_pipeline.pkl                # Shared preprocessing pipeline
+├── preprocess_pipeline_dt.pkl             # Decision Tree preprocessing pipeline
+├── preprocess_pipeline_rf.pkl             # Random Forest preprocessing pipeline
 │
-├── 🌐 Application
-│   ├── app.py                                  # Backend server
-│   └── index.html                             # Frontend UI
-│
-├── 📦 Deployment
-│   ├── requirements.txt
-│   ├── Procfile
-│   ├── render.yaml
-│   └── runtime.txt
-│
-└── 📄 drug_regulatory_classification_dataset.csv
+├── drug_regulatory_classification_dataset.csv
+├── Pharmaceutical Report.pbix             # Power BI Dashboard
+├── app.py                                 # Application backend
+├── index.html                             # Frontend interface
+├── requirements.txt
+├── render.yaml
+└── Procfile
 ```
 
 ---
 
-## 🔬 Features of the Platform
-
-- **Single Model Mode** — Choose any one of 7 models to run classification individually
-- **Ensemble Voting Mode** — All models predict simultaneously; majority vote determines final output
-- **29-Feature Input Panel** — Numeric sliders + categorical selectors for full drug profile entry
-- **Sample Data Loader** — One-click to populate a sample drug record for quick testing
-- **Model Registry** — Live status of all serialized model files on the server
-- **Prediction History** — Tracks all classification runs within the session
-
----
-
-## 📈 Power BI Dashboard
-
-The repository includes a **Pharmaceutical Report.pbix** Power BI dashboard for visual analytics on drug data, regulatory trends, distribution patterns, and market metrics — enabling stakeholder-ready data storytelling alongside the ML platform.
-
----
-
-## 🛠️ Tech Stack
+## Tech Stack
 
 | Layer | Technology |
 |---|---|
 | Data Analysis & EDA | Python, Pandas, NumPy, Matplotlib, Seaborn |
-| Machine Learning | Scikit-Learn, XGBoost |
-| Deep Learning | TensorFlow / Keras (ANN) |
+| Machine Learning | Scikit-learn, XGBoost |
 | Data Visualization | Power BI |
 | Deployment | Render |
 
 ---
 
-## 🚀 Getting Started (Local)
+## How to Run Locally
 
+**1. Clone the repository**
 ```bash
-# 1. Clone the repository
 git clone https://github.com/sakshu3606/drug-regulatory-classification.git
 cd drug-regulatory-classification
+```
 
-# 2. Install dependencies
+**2. Install dependencies**
+```bash
 pip install -r requirements.txt
+```
 
-# 3. Run the application
+**3. Start the application**
+```bash
 python app.py
 ```
 
-Then open `http://localhost:5000` in your browser.
+**4. Open in browser**
+```
+http://localhost:5000
+```
 
 ---
+
+## Power BI Dashboard
+
+The repository includes a `Pharmaceutical Report.pbix` Power BI dashboard that visualizes key metrics from the drug dataset — including regulatory distribution, therapeutic class breakdowns, risk scoring trends, and clinical trial phase analysis — enabling stakeholders to monitor drug compliance patterns at a glance.
+
+---
+
+## Live Demo
+
+The platform is deployed and publicly accessible at:
+
+**[https://pharmai-drug-classification-1.onrender.com](https://pharmai-drug-classification-1.onrender.com)**
+
+> Note: The app is hosted on Render's free tier. It may take 30–60 seconds to wake up on the first load if idle.
+
+---
+
+
+**Sakshi** — Data Analyst  
+[GitHub Profile](https://github.com/sakshu3606)
