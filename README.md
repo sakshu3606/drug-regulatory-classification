@@ -7,7 +7,7 @@
 
 ## Overview
 
-PharmAI is an end-to-end drug intelligence platform built to support pharmaceutical compliance and data-driven regulatory decision-making. The system accepts 29 drug properties as input — spanning clinical, financial, distribution, and risk dimensions and returns a regulatory classification prediction using one or more trained ML models.
+PharmAI is an end-to-end drug intelligence platform built to support pharmaceutical compliance and data-driven regulatory decision-making. The system accepts 29 drug properties as input - spanning clinical, financial, distribution, and risk dimensions and returns a regulatory classification prediction using one or more trained ML models.
 
 The platform is designed to assist analysts, researchers, and compliance teams in evaluating drug profiles quickly and accurately without manual review overhead.
 
