@@ -7,7 +7,7 @@
 
 ## Overview
 
-PharmAI is an end-to-end drug intelligence platform built to support pharmaceutical compliance and data-driven regulatory decision-making. The system accepts 29 drug properties as input — spanning clinical, financial, distribution, and risk dimensions — and returns a regulatory classification prediction using one or more trained ML models.
+PharmAI is an end-to-end drug intelligence platform built to support pharmaceutical compliance and data-driven regulatory decision-making. The system accepts 29 drug properties as input — spanning clinical, financial, distribution, and risk dimensions and returns a regulatory classification prediction using one or more trained ML models.
 
 The platform is designed to assist analysts, researchers, and compliance teams in evaluating drug profiles quickly and accurately without manual review overhead.
 
@@ -42,8 +42,8 @@ Each model was trained, evaluated, and serialized independently. The ensemble mo
 ## Dataset
 
 - **File:** `drug_regulatory_classification_dataset.csv`
-- **Features:** 29 total — 23 numeric, 6 categorical
-- **Target:** Binary classification — `Regulated` / `Non-Regulated`
+- **Features:** 29 total - 23 numeric, 6 categorical
+- **Target:** Binary classification - `Regulated` / `Non-Regulated`
 
 **Feature Categories:**
 
@@ -130,7 +130,7 @@ http://localhost:5000
 
 ## Power BI Dashboard
 
-The repository includes a `Pharmaceutical Report.pbix` Power BI dashboard that visualizes key metrics from the drug dataset — including regulatory distribution, therapeutic class breakdowns, risk scoring trends, and clinical trial phase analysis — enabling stakeholders to monitor drug compliance patterns at a glance.
+The repository includes a `Pharmaceutical Report.pbix` Power BI dashboard that visualizes key metrics from the drug dataset including regulatory distribution, therapeutic class breakdowns, risk scoring trends, and clinical trial phase analysis enabling stakeholders to monitor drug compliance patterns at a glance.
 
 ---
 
