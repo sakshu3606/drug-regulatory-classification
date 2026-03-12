@@ -2,7 +2,6 @@
 
 > Predict whether a pharmaceutical drug is **Regulated** or **Non-Regulated** using a suite of 6 trained machine learning models with single-model precision and ensemble voting.
 
-**Live Platform:** [https://pharmai-drug-classification-1.onrender.com](https://pharmai-drug-classification-1.onrender.com)
 
 ---
 
@@ -135,13 +134,4 @@ The repository includes a `Pharmaceutical Report.pbix` Power BI dashboard that v
 
 ---
 
-## Live Demo
-
-The platform is deployed and publicly accessible at:
-
-**[https://pharmai-drug-classification-1.onrender.com](https://pharmai-drug-classification-1.onrender.com)**
-
-> Note: The app is hosted on Render's free tier. It may take 30–60 seconds to wake up on the first load if idle.
-
----
 
